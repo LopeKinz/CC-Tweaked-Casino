@@ -1,5 +1,11 @@
 -- casino.lua - CASINO LOUNGE (RS Bridge Support, Pending-Payout Lock)
--- Version 4.2.1 - Lua Variable Limit Fix
+-- Version 4.2.2 - UI & Player Detector Bugfix
+--
+-- Changelog v4.2.2:
+-- + FIXED: Game card icons/labels now centered within card boundaries (not full monitor)
+-- + FIXED: Player Detector now uses peripheral.find() with fallback to "left"
+-- + Improved: Better player detector error messages
+-- + This fixes overlapping UI elements visible in game card display
 --
 -- Changelog v4.2.1:
 -- + Fixed Lua "more than 200 local variables" error
@@ -252,14 +258,22 @@ if not bridge then
     error("Keine meBridge/rsBridge gefunden!")
 end
 
--- Player Detector suchen (links vom Computer)
-local player_detector = peripheral.wrap("left")
-if player_detector and player_detector.getPlayersInRange then
-    print("Player Detector gefunden: left")
+-- Player Detector suchen (automatisch oder links vom Computer)
+local player_detector = peripheral.find("player_detector")
+if not player_detector then
+    -- Fallback: versuche "left" für Rückwärtskompatibilität
+    player_detector = peripheral.wrap("left")
+    if player_detector and not player_detector.getPlayersInRange then
+        player_detector = nil
+    end
+end
+
+if player_detector then
+    print("Player Detector gefunden: " .. peripheral.getName(player_detector))
     print("Erkennungsreichweite: " .. PLAYER_DETECTION_RANGE .. " Bloecke")
 else
-    print("WARNUNG: Kein Player Detector auf 'left' gefunden!")
-    player_detector = nil
+    print("WARNUNG: Kein Player Detector gefunden!")
+    print("Fallback: 'Guest' Spieler wird verwendet")
 end
 
 print("Casino gestartet auf Monitor: " .. peripheral.getName(monitor))
@@ -1207,13 +1221,16 @@ local function drawMainMenu()
             drawBox(x1, y1, x2, y2, config.enabledColor)
             drawBorder(x1, y1, x2, y2, colors.white)
 
-            -- Icon
+            -- Icon (centered within card, not full monitor)
             local iconY = y1 + 1
-            mcenter(iconY, config.icon, config.enabledFg, config.enabledColor)
+            local cardWidth = x2 - x1 + 1
+            local iconX = x1 + math.floor((cardWidth - #config.icon) / 2)
+            mwrite(iconX, iconY, config.icon, config.enabledFg, config.enabledColor)
 
-            -- Label
+            -- Label (centered within card, not full monitor)
             local labelY = iconY + 1
-            mcenter(labelY, config.label, config.enabledFg, config.enabledColor)
+            local labelX = x1 + math.floor((cardWidth - #config.label) / 2)
+            mwrite(labelX, labelY, config.label, config.enabledFg, config.enabledColor)
 
             addButton(config.mainButtonId, x1, y1, x2, y2, "", config.enabledFg, config.enabledColor)
         else
