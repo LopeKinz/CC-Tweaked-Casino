@@ -1775,7 +1775,13 @@ local function handleAdminButton(id)
             addButton("stats_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
             
         elseif id == "stats_back" then
-            drawAdminPanel()
+            -- Return to where we came from (main menu or admin panel)
+            if AdminState.panelOpen then
+                drawAdminPanel()
+            else
+                mode = "menu"
+                drawMainMenu()
+            end
 
         elseif id == "stats_players" then
             AdminState.currentStatsOffset = 0
