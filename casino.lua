@@ -188,6 +188,24 @@ local STATS_FILE = "player_stats.dat"
 local playerStats = {}
 local lastSeenPlayers = {}
 
+-- Statistik-Daten sanitieren (sicherstellen dass numerische Felder Zahlen sind)
+local function sanitizeStats(stats)
+    stats.totalVisits = tonumber(stats.totalVisits) or 0
+    stats.totalTimeSpent = tonumber(stats.totalTimeSpent) or 0
+    stats.gamesPlayed = tonumber(stats.gamesPlayed) or 0
+    stats.totalWagered = tonumber(stats.totalWagered) or 0
+    stats.totalWon = tonumber(stats.totalWon) or 0
+    stats.totalLost = tonumber(stats.totalLost) or 0
+    stats.biggestWin = tonumber(stats.biggestWin) or 0
+    stats.biggestLoss = tonumber(stats.biggestLoss) or 0
+    stats.currentStreak = tonumber(stats.currentStreak) or 0
+    stats.longestWinStreak = tonumber(stats.longestWinStreak) or 0
+    stats.longestLoseStreak = tonumber(stats.longestLoseStreak) or 0
+    stats.firstSeen = tonumber(stats.firstSeen) or os.epoch("utc")
+    stats.lastSeen = tonumber(stats.lastSeen) or os.epoch("utc")
+    return stats
+end
+
 -- Statistiken laden
 local function loadPlayerStats()
     if not fs.exists(STATS_FILE) then
@@ -199,6 +217,11 @@ local function loadPlayerStats()
         local content = file.readAll()
         file.close()
         playerStats = textutils.unserialize(content) or {}
+
+        -- Sanitize all loaded player stats to ensure numeric fields are numbers
+        for playerName, stats in pairs(playerStats) do
+            playerStats[playerName] = sanitizeStats(stats)
+        end
     end
 end
 
@@ -230,6 +253,9 @@ local function getOrCreatePlayerStats(playerName)
             longestWinStreak = 0,
             longestLoseStreak = 0
         }
+    else
+        -- Sanitize existing stats to ensure all numeric fields are numbers
+        playerStats[playerName] = sanitizeStats(playerStats[playerName])
     end
     return playerStats[playerName]
 end
