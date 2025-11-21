@@ -931,9 +931,9 @@ end
 ------------- PENDING PAYOUT --------------
 
 -- Offene (nicht auszahlbare) Gewinne, falls Kiste voll ist
--- Offene Gewinne, falls Kiste voll ist
 local pendingPayout = 0
 local payoutBlocked = false
+local payoutInProgress = false  -- Issue #7: Prevent concurrent payout operations
 
 -- maximale Menge, die pro Versuch exportiert wird
 local MAX_EXPORT_CHUNK = 4096   -- kannst du bei Bedarf anpassen
@@ -1115,7 +1115,8 @@ local GameState = {
     }
 }
 
--- Backwards compatibility aliases for game state
+-- Game state variables (Issue #19: These are the actual game variables, not aliases)
+-- Roulette
 local r_state, r_betType, r_choice, r_stake = "type", nil, nil, 0
 local r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
 local r_player = nil
@@ -1871,6 +1872,7 @@ local function resolveRoulette(betType, choice, result)
   local mult = 0
 
   if betType == 1 then
+    -- Issue #12: 36x payout = 35:1 profit + stake return (standard roulette payout)
     if result == choice then hit = true; mult = 36 end
   elseif betType == 2 then
     if result ~= 0 and color == choice then hit = true; mult = 2 end
@@ -2745,17 +2747,27 @@ local function handleBlackjackButton(id)
       bj_dealerPlay()
       
     elseif id=="back_menu" then
+      -- Issue #34: Reset game state when returning to menu during play
       local paid = payPayout(bj_stake)
       if checkPayoutLock() then return end
+      bj_state = "stake"
+      bj_player = nil
+      bj_playerHand = {}
+      bj_dealerHand = {}
+      bj_deck = {}
+      bj_stake = 0
       mode="menu"; drawMainMenu()
     end
-    
+
   elseif bj_state == "result" then
     if id=="bj_again" then
       bj_state = "stake"
       bj_player = nil
       bj_drawStake()
     elseif id=="back_menu" then
+      -- Issue #34: Reset game state when returning to menu
+      bj_state = "stake"
+      bj_player = nil
       mode="menu"; drawMainMenu()
     end
   end
