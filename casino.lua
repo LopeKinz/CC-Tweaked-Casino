@@ -415,18 +415,14 @@ end
 
 -- Statistiken speichern
 local function savePlayerStats()
-    local success, err = pcall(function()
-        local file = fs.open(STATS_FILE, "w")
-        if not file then
-            error("Konnte Datei nicht öffnen: "..STATS_FILE)
-        end
-        file.write(textutils.serialize(playerStats))
-        file.close()
-    end)
-
-    if not success then
-        print("[FEHLER] savePlayerStats: "..tostring(err))
+    -- Einfaches Speichern ohne eigenes Error-Handling
+    -- (Error-Handling erfolgt zentral in safeSavePlayerStats)
+    local file = fs.open(STATS_FILE, "w")
+    if not file then
+        error("Konnte Datei nicht öffnen: "..STATS_FILE)
     end
+    file.write(textutils.serialize(playerStats))
+    file.close()
 end
 
 -- Helper: Sicher speichern mit einheitlichem Error-Handling
@@ -493,22 +489,24 @@ local function getCurrentPlayers()
 end
 
 -- Ermittle den nächsten Spieler am Terminal (für Statistikerfassung)
-local function getNearestPlayer()
-    local detected = getPlayersFromDetector()
-    if #detected.players == 0 then return nil end
+-- Akzeptiert bereits ermittelte Detector-Daten um Doppelabfragen zu vermeiden
+local function getNearestPlayer(detected)
+    if not detected or not detected.players or #detected.players == 0 then
+        return nil
+    end
 
     -- Nimm einfach den ersten/nächsten Spieler
     -- Bei mehreren Spielern: der mit der kürzesten Distanz
     local nearestPlayer = nil
-    local minDistance = math.huge
+    local minDistanceSq = math.huge  -- Verwende quadrierte Distanz um sqrt zu vermeiden
 
     for _, player in ipairs(detected.players) do
         if player and player.name then
             -- Nur Spieler mit gültigen Koordinaten berücksichtigen
             if player.x and player.y and player.z then
-                local distance = math.sqrt(player.x^2 + player.y^2 + player.z^2)
-                if distance < minDistance then
-                    minDistance = distance
+                local distanceSq = player.x^2 + player.y^2 + player.z^2
+                if distanceSq < minDistanceSq then
+                    minDistanceSq = distanceSq
                     nearestPlayer = player.name
                 end
             end
@@ -560,7 +558,8 @@ local function trackPlayers()
 
     -- Aktualisiere currentPlayer nur wenn ein gültiger Spieler gefunden wurde
     -- (verhindert, dass currentPlayer mid-game gelöscht wird)
-    local nearestPlayer = getNearestPlayer()
+    -- Verwende bereits ermittelte Detector-Daten um Doppelabfrage zu vermeiden
+    local nearestPlayer = getNearestPlayer(detected)
     if nearestPlayer then
         currentPlayer = nearestPlayer
     end
@@ -843,20 +842,24 @@ local currentStatsOffset = 0  -- Fuer Pagination der Spieler-Statistiken
 local r_state = "type"
 local r_betType, r_choice, r_stake = nil, nil, 0
 local r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
+local r_player = nil  -- Spieler der dieses Spiel gestartet hat
 
 -- Coinflip
 local c_state, c_stake, c_choice = "stake", 0, nil
 local c_lastWin, c_lastPayout, c_lastSide = false, 0, nil
+local c_player = nil  -- Spieler der dieses Spiel gestartet hat
 
 -- High/Low
 local h_state, h_stake = "stake", 0
 local h_startNum, h_nextNum, h_choice = nil, nil, nil
 local h_lastWin, h_lastPayout, h_lastPush = false, 0, false
+local h_player = nil  -- Spieler der dieses Spiel gestartet hat
 
 -- Blackjack
 local bj_state, bj_stake = "stake", 0
 local bj_playerHand, bj_dealerHand, bj_deck = {}, {}, {}
 local bj_lastWin, bj_lastPayout, bj_lastResult = false, 0, ""
+local bj_player = nil  -- Spieler der dieses Spiel gestartet hat
 
 -- Slots
 local s_state, s_bet = "setup", 1
@@ -864,6 +867,7 @@ local s_grid = {{},{},{}}
 local s_lastWin, s_lastMult, s_lastPayout = false, 0, 0
 local s_freeSpins, s_totalWin, s_winLines = 0, 0, {}
 local s_freeSpinBet = 0  -- merkt sich Einsatz, mit dem Freispiele erspielt wurden
+local s_player = nil  -- Spieler der dieses Spiel gestartet hat
 
 local slotSymbols = {
     {sym="7",   weight=1,  name="Lucky 7"},
@@ -1700,6 +1704,9 @@ local function r_drawResult()
 end
 
 local function r_doSpin()
+  -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
+  r_player = currentPlayer
+
   local playerDia = getPlayerBalance()
   if playerDia < r_stake then
     mode="menu"; drawMainMenu(); return
@@ -1740,9 +1747,9 @@ local function r_doSpin()
     r_lastPayout = 0
   end
 
-  -- Statistik erfassen
-  if currentPlayer then
-    updateGameStats(currentPlayer, r_stake, hit, r_lastPayout)
+  -- Statistik erfassen (verwende r_player statt currentPlayer für korrekte Attribution)
+  if r_player then
+    updateGameStats(r_player, r_stake, hit, r_lastPayout)
   end
 
   sleep(0.5)
@@ -1802,7 +1809,7 @@ local function handleRouletteButton(id)
     end
 
   elseif r_state=="result" then
-    if id=="r_again" then r_state="type"; r_drawChooseType()
+    if id=="r_again" then r_state="type"; r_player = nil; r_drawChooseType()
     elseif id=="back_menu" then mode="menu"; drawMainMenu() end
   end
 end
@@ -1883,14 +1890,17 @@ local function c_drawResult()
 end
 
 local function c_doFlip()
+  -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
+  c_player = currentPlayer
+
   local playerDia = getPlayerBalance()
-  if playerDia < c_stake then 
-    mode="menu"; drawMainMenu(); return 
+  if playerDia < c_stake then
+    mode="menu"; drawMainMenu(); return
   end
-  
+
   local taken = takeStake(c_stake)
-  if taken < c_stake then 
-    mode="menu"; drawMainMenu(); return 
+  if taken < c_stake then
+    mode="menu"; drawMainMenu(); return
   end
 
   clearButtons()
@@ -1917,9 +1927,9 @@ local function c_doFlip()
     c_lastPayout = 0
   end
 
-  -- Statistik erfassen
-  if currentPlayer then
-    updateGameStats(currentPlayer, c_stake, c_lastWin, c_lastPayout)
+  -- Statistik erfassen (verwende c_player statt currentPlayer für korrekte Attribution)
+  if c_player then
+    updateGameStats(c_player, c_stake, c_lastWin, c_lastPayout)
   end
 
   sleep(0.5)
@@ -1940,7 +1950,7 @@ local function handleCoinButton(id)
     elseif id=="back_c_stake" then c_state="stake"; c_drawStake() end
 
   elseif c_state=="result" then
-    if id=="c_again" then c_state="stake"; c_drawStake()
+    if id=="c_again" then c_state="stake"; c_player = nil; c_drawStake()
     elseif id=="back_menu" then mode="menu"; drawMainMenu() end
   end
 end
@@ -2033,14 +2043,17 @@ local function h_drawResult()
 end
 
 local function h_doRound()
+  -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
+  h_player = currentPlayer
+
   local playerDia = getPlayerBalance()
-  if playerDia < h_stake then 
-    mode="menu"; drawMainMenu(); return 
+  if playerDia < h_stake then
+    mode="menu"; drawMainMenu(); return
   end
-  
+
   local taken = takeStake(h_stake)
-  if taken < h_stake then 
-    mode="menu"; drawMainMenu(); return 
+  if taken < h_stake then
+    mode="menu"; drawMainMenu(); return
   end
 
   -- Startzahl NICHT neu ziehen, nur die neue Zahl:
@@ -2065,9 +2078,9 @@ local function h_doRound()
     h_lastWin=false; h_lastPayout=0; h_lastPush=false
   end
 
-  -- Statistik erfassen
-  if currentPlayer then
-    updateGameStats(currentPlayer, h_stake, h_lastWin, h_lastPayout)
+  -- Statistik erfassen (verwende h_player statt currentPlayer für korrekte Attribution)
+  if h_player then
+    updateGameStats(h_player, h_stake, h_lastWin, h_lastPayout)
   end
 
   h_state="result"
@@ -2091,7 +2104,7 @@ local function handleHiloButton(id)
     elseif id=="back_h_stake" then h_state="stake"; h_drawStake() end
 
   elseif h_state=="result" then
-    if id=="h_again" then h_state="stake"; h_drawStake()
+    if id=="h_again" then h_state="stake"; h_player = nil; h_drawStake()
     elseif id=="back_menu" then mode="menu"; drawMainMenu() end
   end
 end
@@ -2331,9 +2344,9 @@ local function bj_dealerPlay()
     bj_lastResult = "lose"
   end
 
-  -- Statistik erfassen
-  if currentPlayer then
-    updateGameStats(currentPlayer, bj_stake, bj_lastWin, bj_lastPayout)
+  -- Statistik erfassen (verwende bj_player statt currentPlayer für korrekte Attribution)
+  if bj_player then
+    updateGameStats(bj_player, bj_stake, bj_lastWin, bj_lastPayout)
   end
 
   bj_state = "result"
@@ -2341,11 +2354,14 @@ local function bj_dealerPlay()
 end
 
 local function bj_startGame()
+  -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
+  bj_player = currentPlayer
+
   local playerDia = getPlayerBalance()
   if playerDia < bj_stake then
     mode="menu"; drawMainMenu(); return
   end
-  
+
   local taken = takeStake(bj_stake)
   if taken < bj_stake then
     mode="menu"; drawMainMenu(); return
@@ -2407,6 +2423,7 @@ local function handleBlackjackButton(id)
   elseif bj_state == "result" then
     if id=="bj_again" then
       bj_state = "stake"
+      bj_player = nil
       bj_drawStake()
     elseif id=="back_menu" then
       mode="menu"; drawMainMenu()
@@ -2612,6 +2629,11 @@ local function s_drawScreen()
 end
 
 local function s_doSpin()
+  -- Erfasse den Spieler beim ersten echten Spin (nicht bei Freispielen)
+  if s_freeSpins == 0 then
+    s_player = currentPlayer
+  end
+
   local playerDia = getPlayerBalance()
   local isFreeSpin = (s_freeSpins > 0)
   local cost = isFreeSpin and 0 or s_bet
@@ -2721,8 +2743,9 @@ local function s_doSpin()
   end
 
   -- Statistik erfassen (nur bei echten Spins, nicht bei Freispielen)
-  if currentPlayer and cost > 0 then
-    updateGameStats(currentPlayer, cost, s_lastWin, s_lastPayout)
+  -- Verwende s_player statt currentPlayer für korrekte Attribution
+  if s_player and cost > 0 then
+    updateGameStats(s_player, cost, s_lastWin, s_lastPayout)
   end
 
   s_state="result"
@@ -2788,6 +2811,7 @@ local function drawRouletteSimple()
   r_state="type"
   r_betType, r_choice, r_stake = nil, nil, 0
   r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
+  r_player = nil  -- Reset player tracking
   r_drawChooseType()
 end
 
@@ -2796,6 +2820,7 @@ local function drawHiloSimple()
   h_stake = 0
   h_startNum, h_nextNum, h_choice = nil, nil, nil
   h_lastWin, h_lastPayout, h_lastPush = false, 0, false
+  h_player = nil  -- Reset player tracking
   h_drawStake()
 end
 
@@ -2804,6 +2829,7 @@ local function drawBlackjackSimple()
   bj_stake = 0
   bj_playerHand, bj_dealerHand, bj_deck = {}, {}, {}
   bj_lastWin, bj_lastPayout, bj_lastResult = false, 0, ""
+  bj_player = nil  -- Reset player tracking
   bj_drawStake()
 end
 
@@ -2814,6 +2840,7 @@ local function drawSlotsSimple()
   s_lastWin, s_lastMult, s_lastPayout = false, 0, 0
   s_freeSpins, s_totalWin, s_winLines = 0, 0, {}
   s_freeSpinBet = 0
+  s_player = nil  -- Reset player tracking
   s_drawScreen()
 end
 
@@ -2847,7 +2874,7 @@ local function handleButton(id)
         if id=="game_roulette" and gameStatus.roulette then
             mode="roulette"; drawRouletteSimple()
         elseif id=="game_coin" and gameStatus.coinflip then
-            mode="coin"; c_state="stake"; c_drawStake()
+            mode="coin"; c_state="stake"; c_player = nil; c_drawStake()
         elseif id=="game_hilo" and gameStatus.hilo then
             mode="hilo"; drawHiloSimple()
         elseif id=="game_blackjack" and gameStatus.blackjack then
