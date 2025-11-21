@@ -25,7 +25,7 @@
 
 local DIAMOND_ID = "minecraft:diamond"
 local IO_CHEST_DIR = "front"  -- Richtung der IO-Chest von der Bridge aus
-local PLAYER_DETECTION_RANGE = 5  -- Reichweite fuer Player Detector (in Bloecken)
+local PLAYER_DETECTION_RANGE = 10  -- Reichweite fuer Player Detector (in Bloecken)
 local STATS_PAGE_SIZE = 6  -- Anzahl der Spieler pro Seite in der Statistik-Ansicht
 
 -- Bridge-Typen die wir suchen
@@ -368,29 +368,64 @@ end
 
 -- Statistiken laden
 local function loadPlayerStats()
-    if not fs.exists(STATS_FILE) then
-        playerStats = {}
-        return
-    end
-    local file = fs.open(STATS_FILE, "r")
-    if file then
+    local success, err = pcall(function()
+        if not fs.exists(STATS_FILE) then
+            playerStats = {}
+            return
+        end
+
+        local file = fs.open(STATS_FILE, "r")
+        if not file then
+            error("Konnte Datei nicht öffnen: "..STATS_FILE)
+        end
+
         local content = file.readAll()
         file.close()
-        playerStats = textutils.unserialize(content) or {}
+
+        if not content or content == "" then
+            playerStats = {}
+            return
+        end
+
+        local deserialized = textutils.unserialize(content)
+        if not deserialized or type(deserialized) ~= "table" then
+            error("Ungültige Daten in Statistik-Datei")
+        end
+
+        playerStats = deserialized
 
         -- Sanitize all loaded player stats to ensure numeric fields are numbers
         for playerName, stats in pairs(playerStats) do
-            playerStats[playerName] = sanitizeStats(stats)
+            if type(stats) == "table" then
+                playerStats[playerName] = sanitizeStats(stats)
+            else
+                print("[WARNUNG] Ungültige Stats für Spieler: "..tostring(playerName))
+                playerStats[playerName] = nil
+            end
         end
+    end)
+
+    if not success then
+        print("[FEHLER] loadPlayerStats: "..tostring(err))
+        print("[INFO] Erstelle neue leere Statistik-Datei")
+        playerStats = {}
+        savePlayerStats()
     end
 end
 
 -- Statistiken speichern
 local function savePlayerStats()
-    local file = fs.open(STATS_FILE, "w")
-    if file then
+    local success, err = pcall(function()
+        local file = fs.open(STATS_FILE, "w")
+        if not file then
+            error("Konnte Datei nicht öffnen: "..STATS_FILE)
+        end
         file.write(textutils.serialize(playerStats))
         file.close()
+    end)
+
+    if not success then
+        print("[FEHLER] savePlayerStats: "..tostring(err))
     end
 end
 
@@ -449,6 +484,32 @@ local function getCurrentPlayers()
     return getPlayersFromDetector().names
 end
 
+-- Ermittle den nächsten Spieler am Terminal (für Statistikerfassung)
+local function getNearestPlayer()
+    local detected = getPlayersFromDetector()
+    if #detected.players == 0 then return nil end
+
+    -- Nimm einfach den ersten/nächsten Spieler
+    -- Bei mehreren Spielern: der mit der kürzesten Distanz
+    local nearestPlayer = nil
+    local minDistance = math.huge
+
+    for _, player in ipairs(detected.players) do
+        if player and player.name then
+            local distance = 0
+            if player.x and player.y and player.z then
+                distance = math.sqrt(player.x^2 + player.y^2 + player.z^2)
+            end
+            if distance < minDistance then
+                minDistance = distance
+                nearestPlayer = player.name
+            end
+        end
+    end
+
+    return nearestPlayer
+end
+
 -- Spieler erfassen und tracken
 local function trackPlayers()
     local detected = getPlayersFromDetector()
@@ -485,48 +546,76 @@ local function trackPlayers()
 
     lastSeenPlayers = newSeenPlayers
     savePlayerStats()
+
+    -- Aktualisiere currentPlayer mit dem nächsten Spieler
+    currentPlayer = getNearestPlayer()
 end
 
 -- Spiel-Statistik aktualisieren
 local function updateGameStats(playerName, wager, won, payout)
-    local stats = getOrCreatePlayerStats(playerName)
-    stats.gamesPlayed = stats.gamesPlayed + 1
-    stats.totalWagered = stats.totalWagered + wager
-
-    if won then
-        local profit = payout - wager
-        stats.totalWon = stats.totalWon + profit
-        if profit > stats.biggestWin then
-            stats.biggestWin = profit
-        end
-
-        if stats.currentStreak >= 0 then
-            stats.currentStreak = stats.currentStreak + 1
-        else
-            stats.currentStreak = 1
-        end
-
-        if stats.currentStreak > stats.longestWinStreak then
-            stats.longestWinStreak = stats.currentStreak
-        end
-    else
-        stats.totalLost = stats.totalLost + wager
-        if wager > stats.biggestLoss then
-            stats.biggestLoss = wager
-        end
-
-        if stats.currentStreak <= 0 then
-            stats.currentStreak = stats.currentStreak - 1
-        else
-            stats.currentStreak = -1
-        end
-
-        if math.abs(stats.currentStreak) > stats.longestLoseStreak then
-            stats.longestLoseStreak = math.abs(stats.currentStreak)
-        end
+    -- Validierung der Parameter
+    if not playerName or type(playerName) ~= "string" or playerName == "" then
+        print("[FEHLER] updateGameStats: Ungültiger Spielername")
+        return
     end
 
-    savePlayerStats()
+    wager = tonumber(wager) or 0
+    payout = tonumber(payout) or 0
+
+    if wager < 0 then
+        print("[FEHLER] updateGameStats: Negativer Einsatz: "..wager)
+        wager = 0
+    end
+
+    if payout < 0 then
+        print("[FEHLER] updateGameStats: Negativer Payout: "..payout)
+        payout = 0
+    end
+
+    local success, err = pcall(function()
+        local stats = getOrCreatePlayerStats(playerName)
+        stats.gamesPlayed = stats.gamesPlayed + 1
+        stats.totalWagered = stats.totalWagered + wager
+
+        if won then
+            local profit = payout - wager
+            stats.totalWon = stats.totalWon + profit
+            if profit > stats.biggestWin then
+                stats.biggestWin = profit
+            end
+
+            if stats.currentStreak >= 0 then
+                stats.currentStreak = stats.currentStreak + 1
+            else
+                stats.currentStreak = 1
+            end
+
+            if stats.currentStreak > stats.longestWinStreak then
+                stats.longestWinStreak = stats.currentStreak
+            end
+        else
+            stats.totalLost = stats.totalLost + wager
+            if wager > stats.biggestLoss then
+                stats.biggestLoss = wager
+            end
+
+            if stats.currentStreak <= 0 then
+                stats.currentStreak = stats.currentStreak - 1
+            else
+                stats.currentStreak = -1
+            end
+
+            if math.abs(stats.currentStreak) > stats.longestLoseStreak then
+                stats.longestLoseStreak = math.abs(stats.currentStreak)
+            end
+        end
+
+        savePlayerStats()
+    end)
+
+    if not success then
+        print("[FEHLER] updateGameStats für "..playerName..": "..tostring(err))
+    end
 end
 
 -- Formatiere Zeit
@@ -728,6 +817,7 @@ end
 ------------- GLOBAL STATE -------------
 
 local mode = "menu"
+local currentPlayer = nil  -- Der Spieler, der gerade am Terminal spielt
 
 -- Admin
 local ADMIN_PIN = "1234"
@@ -1044,67 +1134,90 @@ local function drawPlayerStatsDetail(playerName)
         end
     end
 
-    drawChrome("Spieler: "..playerName,"Detaillierte Statistiken")
+    drawChrome("Spieler-Profil","Detaillierte Statistiken")
 
-    drawBox(4,4,mw-3,mh-5,COLOR_PANEL_DARK)
+    -- Header Box mit Spielername
+    drawBox(4,4,mw-3,7,isOnline and colors.cyan or COLOR_PANEL)
+    drawBorder(4,4,mw-3,7,COLOR_GOLD)
 
     local y = 5
-    local nameLabel = playerName .. (isOnline and " [ONLINE]" or "")
-    mcenter(y, "=== " .. nameLabel .. " ===", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
+    local nameLabel = playerName
+    mcenter(y, nameLabel, colors.white, isOnline and colors.cyan or COLOR_PANEL); y = y + 1
+
+    local statusLabel = isOnline and "[ONLINE]" or "OFFLINE"
+    local statusColor = isOnline and colors.lime or colors.lightGray
+    mcenter(y, statusLabel, statusColor, isOnline and colors.cyan or COLOR_PANEL); y = y + 1
 
     -- Zeige "Zuletzt gesehen" wenn nicht online
     if not isOnline then
         if stats.lastSeen and type(stats.lastSeen) == "number" then
             local timeSince = os.epoch("utc") - stats.lastSeen
             local lastSeenStr = formatTime(timeSince) .. " her"
-            mcenter(y, "Zuletzt: " .. lastSeenStr, colors.lightGray, COLOR_PANEL_DARK)
+            mcenter(y, "Zuletzt: " .. lastSeenStr, colors.lightGray, isOnline and colors.cyan or COLOR_PANEL)
         else
-            mcenter(y, "Zuletzt: unbekannt", colors.lightGray, COLOR_PANEL_DARK)
+            mcenter(y, "Zuletzt: unbekannt", colors.lightGray, isOnline and colors.cyan or COLOR_PANEL)
         end
     end
+
+    -- Statistik Box
+    y = 9
+    drawBox(4,y,mw-3,mh-5,COLOR_PANEL_DARK)
     y = y + 1
 
-    mwrite(6,y,"Besuche:",colors.lightGray,COLOR_PANEL_DARK)
+    -- Aktivitäts-Statistiken
+    mcenter(y, "--- AKTIVITAET ---", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
+
+    mwrite(6,y,"# Besuche:",colors.lightGray,COLOR_PANEL_DARK)
     mwrite(mw-15,y,tostring(stats.totalVisits),colors.white,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"Zeit:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,formatTime(stats.totalTimeSpent),colors.white,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,"# Spielzeit:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,formatTime(stats.totalTimeSpent),COLOR_INFO,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"Spiele:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(6,y,"# Spiele:",colors.lightGray,COLOR_PANEL_DARK)
     mwrite(mw-15,y,tostring(stats.gamesPlayed),colors.white,COLOR_PANEL_DARK); y = y + 2
 
-    mwrite(6,y,"Gesetzt:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.totalWagered.." Dia",COLOR_INFO,COLOR_PANEL_DARK); y = y + 1
+    -- Finanz-Statistiken
+    mcenter(y, "--- FINANZEN ---", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
+
+    mwrite(6,y,"$ Gesetzt:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.totalWagered.." Dia",colors.orange,COLOR_PANEL_DARK); y = y + 1
 
     local netProfit = stats.totalWon - stats.totalLost
     local profitColor = netProfit >= 0 and COLOR_SUCCESS or COLOR_WARNING
-    mwrite(6,y,"Netto:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(6,y,"$ Netto:",colors.lightGray,COLOR_PANEL_DARK)
     local netText = netProfit >= 0 and "+"..netProfit or tostring(netProfit)
-    mwrite(mw-15,y,netText.." Dia",profitColor,COLOR_PANEL_DARK); y = y + 2
+    mwrite(mw-15,y,netText.." Dia",profitColor,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"Groesster Gewinn:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.biggestWin.." Dia",COLOR_SUCCESS,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,"$ Top Gewinn:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,"+"..stats.biggestWin.." Dia",colors.lime,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"Groesster Verlust:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.biggestLoss.." Dia",COLOR_WARNING,COLOR_PANEL_DARK); y = y + 2
+    mwrite(6,y,"$ Top Verlust:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,"-"..stats.biggestLoss.." Dia",colors.red,COLOR_PANEL_DARK); y = y + 2
+
+    -- Streak-Statistiken
+    mcenter(y, "--- SERIEN ---", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
 
     local streakText = ""
     local streakColor = colors.white
+    local streakIcon = ""
     if stats.currentStreak > 0 then
         streakText = "+"..stats.currentStreak.." Siege"
-        streakColor = COLOR_SUCCESS
+        streakColor = colors.lime
+        streakIcon = "^ "
     elseif stats.currentStreak < 0 then
         streakText = math.abs(stats.currentStreak).." Niederlagen"
-        streakColor = COLOR_WARNING
+        streakColor = colors.red
+        streakIcon = "v "
     else
-        streakText = "Keine aktive Serie"
+        streakText = "Keine Serie"
         streakColor = colors.lightGray
+        streakIcon = "- "
     end
-    mwrite(6,y,"Aktuelle Serie:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-25,y,streakText,streakColor,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,streakIcon.."Aktuell:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-20,y,streakText,streakColor,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"Beste Serie:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.longestWinStreak.." Siege",colors.white,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,"^ Beste:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.longestWinStreak.." Siege",colors.lime,COLOR_PANEL_DARK); y = y + 1
 
     addButton("player_detail_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
 end
@@ -1613,6 +1726,12 @@ local function r_doSpin()
     r_lastPayout = 0
   end
 
+  -- Statistik erfassen
+  if currentPlayer then
+    updateGameStats(currentPlayer, r_stake, hit, r_lastPayout)
+    savePlayerStats()
+  end
+
   sleep(0.5)
   r_state="result"
   r_drawResult()
@@ -1785,6 +1904,12 @@ local function c_doFlip()
     c_lastPayout = 0
   end
 
+  -- Statistik erfassen
+  if currentPlayer then
+    updateGameStats(currentPlayer, c_stake, c_lastWin, c_lastPayout)
+    savePlayerStats()
+  end
+
   sleep(0.5)
   c_state="result"
   c_drawResult()
@@ -1926,6 +2051,12 @@ local function h_doRound()
     if checkPayoutLock() then return end
   else
     h_lastWin=false; h_lastPayout=0; h_lastPush=false
+  end
+
+  -- Statistik erfassen
+  if currentPlayer then
+    updateGameStats(currentPlayer, h_stake, h_lastWin, h_lastPayout)
+    savePlayerStats()
   end
 
   h_state="result"
@@ -2188,7 +2319,13 @@ local function bj_dealerPlay()
   else
     bj_lastResult = "lose"
   end
-  
+
+  -- Statistik erfassen
+  if currentPlayer then
+    updateGameStats(currentPlayer, bj_stake, bj_lastWin, bj_lastPayout)
+    savePlayerStats()
+  end
+
   bj_state = "result"
   bj_drawResult()
 end
@@ -2573,9 +2710,15 @@ local function s_doSpin()
     s_lastPayout = 0
   end
 
+  -- Statistik erfassen (nur bei echten Spins, nicht bei Freispielen)
+  if currentPlayer and cost > 0 then
+    updateGameStats(currentPlayer, cost, s_lastWin, s_lastPayout)
+    savePlayerStats()
+  end
+
   s_state="result"
   s_drawScreen()
-  
+
   if s_freeSpins > 0 then
     sleep(2.5)
     s_doSpin()
