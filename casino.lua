@@ -496,18 +496,15 @@ local function getNearestPlayer()
 
     for _, player in ipairs(detected.players) do
         if player and player.name then
-            local distance = math.huge  -- Default: weit weg
+            -- Nur Spieler mit gültigen Koordinaten berücksichtigen
             if player.x and player.y and player.z then
-                -- Berechne Distanz nur wenn Koordinaten verfügbar
-                distance = math.sqrt(player.x^2 + player.y^2 + player.z^2)
-            else
-                -- Fallback: wenn keine Koordinaten, nimm diesen Spieler mit Priorität 0
-                distance = 0
+                local distance = math.sqrt(player.x^2 + player.y^2 + player.z^2)
+                if distance < minDistance then
+                    minDistance = distance
+                    nearestPlayer = player.name
+                end
             end
-            if distance < minDistance then
-                minDistance = distance
-                nearestPlayer = player.name
-            end
+            -- Spieler ohne Koordinaten werden ignoriert (kein Fallback)
         end
     end
 
@@ -549,7 +546,12 @@ local function trackPlayers()
     end
 
     lastSeenPlayers = newSeenPlayers
-    savePlayerStats()
+
+    -- Isolate persistence errors so logic bugs still surface via safeMain
+    local ok, err = pcall(savePlayerStats)
+    if not ok then
+        print("[FEHLER] trackPlayers: Konnte Stats nicht speichern: " .. tostring(err))
+    end
 
     -- Aktualisiere currentPlayer mit dem nächsten Spieler
     currentPlayer = getNearestPlayer()
@@ -576,49 +578,48 @@ local function updateGameStats(playerName, wager, won, payout)
         payout = 0
     end
 
-    local success, err = pcall(function()
-        local stats = getOrCreatePlayerStats(playerName)
-        stats.gamesPlayed = stats.gamesPlayed + 1
-        stats.totalWagered = stats.totalWagered + wager
+    -- Update stats logic (let logic bugs fail via safeMain)
+    local stats = getOrCreatePlayerStats(playerName)
+    stats.gamesPlayed = stats.gamesPlayed + 1
+    stats.totalWagered = stats.totalWagered + wager
 
-        if won then
-            local profit = payout - wager
-            stats.totalWon = stats.totalWon + profit
-            if profit > stats.biggestWin then
-                stats.biggestWin = profit
-            end
-
-            if stats.currentStreak >= 0 then
-                stats.currentStreak = stats.currentStreak + 1
-            else
-                stats.currentStreak = 1
-            end
-
-            if stats.currentStreak > stats.longestWinStreak then
-                stats.longestWinStreak = stats.currentStreak
-            end
-        else
-            stats.totalLost = stats.totalLost + wager
-            if wager > stats.biggestLoss then
-                stats.biggestLoss = wager
-            end
-
-            if stats.currentStreak <= 0 then
-                stats.currentStreak = stats.currentStreak - 1
-            else
-                stats.currentStreak = -1
-            end
-
-            if math.abs(stats.currentStreak) > stats.longestLoseStreak then
-                stats.longestLoseStreak = math.abs(stats.currentStreak)
-            end
+    if won then
+        local profit = payout - wager
+        stats.totalWon = stats.totalWon + profit
+        if profit > stats.biggestWin then
+            stats.biggestWin = profit
         end
 
-        savePlayerStats()
-    end)
+        if stats.currentStreak >= 0 then
+            stats.currentStreak = stats.currentStreak + 1
+        else
+            stats.currentStreak = 1
+        end
 
-    if not success then
-        print("[FEHLER] updateGameStats für "..playerName..": "..tostring(err))
+        if stats.currentStreak > stats.longestWinStreak then
+            stats.longestWinStreak = stats.currentStreak
+        end
+    else
+        stats.totalLost = stats.totalLost + wager
+        if wager > stats.biggestLoss then
+            stats.biggestLoss = wager
+        end
+
+        if stats.currentStreak <= 0 then
+            stats.currentStreak = stats.currentStreak - 1
+        else
+            stats.currentStreak = -1
+        end
+
+        if math.abs(stats.currentStreak) > stats.longestLoseStreak then
+            stats.longestLoseStreak = math.abs(stats.currentStreak)
+        end
+    end
+
+    -- Isolate persistence errors so logic bugs still surface via safeMain
+    local ok, err = pcall(savePlayerStats)
+    if not ok then
+        print("[FEHLER] updateGameStats: Konnte Stats nicht speichern: " .. tostring(err))
     end
 end
 
@@ -1736,7 +1737,6 @@ local function r_doSpin()
   -- Statistik erfassen
   if currentPlayer then
     updateGameStats(currentPlayer, r_stake, hit, r_lastPayout)
-    savePlayerStats()
   end
 
   sleep(0.5)
@@ -1914,7 +1914,6 @@ local function c_doFlip()
   -- Statistik erfassen
   if currentPlayer then
     updateGameStats(currentPlayer, c_stake, c_lastWin, c_lastPayout)
-    savePlayerStats()
   end
 
   sleep(0.5)
@@ -2063,7 +2062,6 @@ local function h_doRound()
   -- Statistik erfassen
   if currentPlayer then
     updateGameStats(currentPlayer, h_stake, h_lastWin, h_lastPayout)
-    savePlayerStats()
   end
 
   h_state="result"
@@ -2330,7 +2328,6 @@ local function bj_dealerPlay()
   -- Statistik erfassen
   if currentPlayer then
     updateGameStats(currentPlayer, bj_stake, bj_lastWin, bj_lastPayout)
-    savePlayerStats()
   end
 
   bj_state = "result"
@@ -2720,7 +2717,6 @@ local function s_doSpin()
   -- Statistik erfassen (nur bei echten Spins, nicht bei Freispielen)
   if currentPlayer and cost > 0 then
     updateGameStats(currentPlayer, cost, s_lastWin, s_lastPayout)
-    savePlayerStats()
   end
 
   s_state="result"
@@ -2894,8 +2890,9 @@ local function safeMain()
         -- Tracking-Timer starten
         local trackingTimer = os.startTimer(2)
 
-        -- Monitor-Namen für Event-Vergleich speichern
+        -- Peripheral-Namen für Event-Vergleich speichern
         local monitorName = peripheral.getName(monitor)
+        local bridgeName = peripheral.getName(bridge)
 
         while true do
             local e, param1, x, y = os.pullEvent()
@@ -2918,7 +2915,7 @@ local function safeMain()
                 -- Prüfe ob es der Monitor oder die Bridge war
                 if param1 == monitorName then
                     error("Monitor wurde entfernt!")
-                elseif param1 == peripheral.getName(bridge) then
+                elseif param1 == bridgeName then
                     error("Bridge wurde entfernt!")
                 end
             end
