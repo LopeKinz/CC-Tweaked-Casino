@@ -1,5 +1,12 @@
 -- casino.lua - CASINO LOUNGE (RS Bridge Support, Pending-Payout Lock)
--- Version 4.2.4 - Player Detector Fix
+-- Version 4.2.5 - Footer Fix & Idle Splash Screen
+--
+-- Changelog v4.2.5:
+-- + FIXED: Player name in footer now only shows during active games
+-- + ADDED: Idle splash screen after 60 seconds of inactivity in main menu
+-- + ADDED: Casino promotional splash screen with game overview
+-- + Touch splash screen to return to main menu
+-- + Idle timer automatically resets on any user interaction
 --
 -- Changelog v4.2.4:
 -- + FIXED: Player Detector now properly handles both string and table player data
@@ -385,9 +392,9 @@ local function drawChrome(title, footer)
     monitor.setCursorPos(1,mh)
     monitor.write(string.rep(" ",mw))
     if footer then
-        -- Add player name to footer if available
+        -- Add player name to footer only during active games
         local footerText = footer
-        if currentPlayer and currentPlayer ~= "Guest" then
+        if gameInProgress and currentPlayer and currentPlayer ~= "Guest" then
             footerText = "Spieler: "..currentPlayer.." | "..footer
         end
         mcenter(mh,footerText,COLORS.FOOTER_TEXT,COLORS.FOOTER_BG)
@@ -1212,6 +1219,40 @@ local function checkPayoutLock()
         return true
     end
     return false
+end
+
+----------- SPLASH SCREEN (IDLE) ------------------
+
+local function drawSplashScreen()
+    clearButtons()
+    mclearRaw()
+
+    -- Animated casino logo/banner
+    local logoY = 4
+    drawBox(3, logoY, mw-2, logoY + 6, COLORS.GOLD)
+    drawBorder(3, logoY, mw-2, logoY + 6, COLORS.ACCENT)
+
+    mcenter(logoY + 1, "$$$ CASINO LOUNGE $$$", colors.black, COLORS.GOLD)
+    mcenter(logoY + 2, "*********************", COLORS.ACCENT, COLORS.GOLD)
+    mcenter(logoY + 3, "Dein Glueck wartet!", colors.white, COLORS.GOLD)
+    mcenter(logoY + 4, "5 spannende Spiele", colors.lightGray, COLORS.GOLD)
+    mcenter(logoY + 5, "Grosse Gewinne!", colors.white, COLORS.GOLD)
+
+    -- Features list
+    local featuresY = logoY + 9
+    drawBox(5, featuresY, mw-4, featuresY + 8, COLOR_PANEL_DARK)
+
+    mcenter(featuresY + 1, "VERFUEGBARE SPIELE:", COLORS.ACCENT)
+    mcenter(featuresY + 2, "Roulette - Slots - Coinflip", colors.white, COLOR_PANEL_DARK)
+    mcenter(featuresY + 3, "High/Low - Blackjack", colors.white, COLOR_PANEL_DARK)
+    mcenter(featuresY + 5, "Lege Diamanten ein", COLORS.GOLD, COLOR_PANEL_DARK)
+    mcenter(featuresY + 6, "und spiele um echte Gewinne!", colors.lightGray, COLOR_PANEL_DARK)
+
+    -- Call to action
+    mcenter(mh - 3, ">>> TIPPE UM ZU SPIELEN <<<", COLORS.ACCENT)
+
+    -- Small footer
+    mcenter(mh, "Casino Lounge v4.2", colors.gray)
 end
 
 ----------- HAUPTMENÜ ------------------
@@ -3501,6 +3542,7 @@ end
 local function safeMain()
     -- Issue #31: Make timer accessible for cleanup
     local trackingTimer = nil
+    local idleTimer = nil
 
     local success, err = pcall(function()
         mode="menu"
@@ -3508,6 +3550,9 @@ local function safeMain()
 
         -- Tracking-Timer starten
         trackingTimer = os.startTimer(2)
+
+        -- Idle-Timer starten (60 Sekunden)
+        idleTimer = os.startTimer(60)
 
         -- Peripheral-Namen für Event-Vergleich speichern (nur wenn verfügbar)
         local monitorName = monitor and peripheral.getName(monitor) or nil
@@ -3523,13 +3568,33 @@ local function safeMain()
                     error("Monitor wurde entfernt!")
                 end
                 if monitorName and side == monitorName then
-                    local id = hitButton(x,y)
-                    if id then handleButton(id) end
+                    -- Reset idle timer on any touch
+                    if idleTimer then
+                        os.cancelTimer(idleTimer)
+                    end
+                    idleTimer = os.startTimer(60)
+
+                    -- If in splash mode, return to menu
+                    if mode == "splash" then
+                        mode = "menu"
+                        drawMainMenu()
+                    else
+                        local id = hitButton(x,y)
+                        if id then handleButton(id) end
+                    end
                 end
             elseif e == "timer" and param1 == trackingTimer then
                 -- Spieler tracken alle 2 Sekunden
                 trackPlayers()
                 trackingTimer = os.startTimer(2)
+            elseif e == "timer" and param1 == idleTimer then
+                -- Idle timeout: show splash screen if in main menu
+                if mode == "menu" then
+                    mode = "splash"
+                    drawSplashScreen()
+                end
+                -- Restart idle timer
+                idleTimer = os.startTimer(60)
             elseif e == "peripheral_detach" then
                 -- Prüfe ob es der Monitor oder die Bridge war
                 if monitorName and param1 == monitorName then
@@ -3551,6 +3616,11 @@ local function safeMain()
         -- Issue #31: Cancel tracking timer
         if trackingTimer then
             pcall(os.cancelTimer, trackingTimer)
+        end
+
+        -- Cancel idle timer
+        if idleTimer then
+            pcall(os.cancelTimer, idleTimer)
         end
 
         -- Try to save player stats to prevent data loss
