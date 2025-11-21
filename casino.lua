@@ -732,13 +732,15 @@ end
 local function trackPlayers()
     local detected = getPlayersFromDetector()
 
-    -- Fallback to Guest if no players detected
-    if #detected.names == 0 then
+    -- FIXED BUG #1: Guest should ONLY be used when NO player detector is available
+    -- If player_detector exists but finds no players, don't track anyone
+    if not player_detector and #detected.names == 0 then
         if not currentPlayer then
             currentPlayer = "Guest"
         end
         -- Use Guest as the only detected player to ensure stats are tracked
         detected.names = {"Guest"}
+        detected.players = {"Guest"}  -- Also add to players so getNearestPlayer can find it
     end
 
     local currentTime = os.epoch("utc")
@@ -784,17 +786,30 @@ local function trackPlayers()
         safeSavePlayerStats("trackPlayers_periodic", false)
     end
 
+    -- FIXED BUG #1: Improved currentPlayer selection logic
     -- Aktualisiere currentPlayer nur wenn ein gültiger Spieler gefunden wurde
     -- (verhindert, dass currentPlayer mid-game gelöscht wird)
     -- Issue #6: Don't change currentPlayer during active games
     -- Verwende bereits ermittelte Detector-Daten um Doppelabfrage zu vermeiden
-    local nearestPlayer = getNearestPlayer(detected)
-    if nearestPlayer and not gameInProgress then
-        if currentPlayer ~= nearestPlayer then
-            print("[TRACKING] Neuer naechster Spieler: "..nearestPlayer.." (vorher: "..(currentPlayer or "keiner")..")")
+    if not gameInProgress then
+        local nearestPlayer = getNearestPlayer(detected)
+        if nearestPlayer then
+            -- Real player detected (or Guest if no detector available)
+            if currentPlayer ~= nearestPlayer then
+                print("[TRACKING] Neuer naechster Spieler: "..nearestPlayer.." (vorher: "..(currentPlayer or "keiner")..")")
+            end
+            currentPlayer = nearestPlayer
+        elseif not player_detector then
+            -- No player detector available, use Guest as fallback
+            if not currentPlayer or currentPlayer ~= "Guest" then
+                currentPlayer = "Guest"
+                print("[TRACKING] Kein Player Detector - verwende Guest")
+            end
+        else
+            -- Player detector exists but no players in range - keep current player
+            print("[TRACKING] Keine Spieler in Range - behalte: "..(currentPlayer or "keiner"))
         end
-        currentPlayer = nearestPlayer
-    elseif nearestPlayer and gameInProgress then
+    else
         print("[TRACKING] Spiel laeuft - behalte aktuellen Spieler: "..(currentPlayer or "Guest"))
     end
 end
@@ -1111,7 +1126,9 @@ local AdminState = {
     PIN = "1234",
     panelOpen = false,
     pinInput = "",
-    currentStatsOffset = 0
+    currentStatsOffset = 0,
+    cameFromMainMenu = false,  -- Track if stats accessed from main menu
+    cameFromStatsOverview = false  -- FIXED BUG #2: Track if in financial overview sub-navigation
 }
 
 -- Game State Variables (grouped to reduce local count)
@@ -1571,6 +1588,29 @@ local function drawPlayerStatsDetail(playerName)
     addButton("player_detail_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLORS.STATS_HEADER)
 end
 
+-- FIXED BUG #2: Extracted financial overview into separate function for proper navigation
+local function drawFinancialOverview()
+    clearButtons()
+    drawChrome("Statistiken","Casino-Uebersicht")
+
+    local playerDia = getPlayerBalance()
+    local bankDia = getItemCountInNet(DIAMOND_ID)
+    local profit = bankDia - 500
+
+    drawBox(4,5,mw-3,13,COLOR_PANEL_DARK)
+    mcenter(6,"=== FINANZEN ===",COLOR_GOLD,COLOR_PANEL_DARK)
+    mcenter(8,"Spieler-Chips: "..playerDia,COLOR_INFO,COLOR_PANEL_DARK)
+    mcenter(9,"Casino-Bank: "..bankDia,COLOR_SUCCESS,COLOR_PANEL_DARK)
+
+    local profitColor = profit >= 0 and COLOR_SUCCESS or COLOR_WARNING
+    local profitText = profit >= 0 and "+"..profit or tostring(profit)
+    mcenter(11,"Gewinn/Verlust: "..profitText.." Dia",profitColor,COLOR_PANEL_DARK)
+    mcenter(12,"(seit Start mit 500 Bank)",colors.lightGray,COLOR_PANEL_DARK)
+
+    addButton("stats_players",4,15,mw-3,17,"Spieler-Statistiken",colors.black,colors.cyan)
+    addButton("stats_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
+end
+
 local function drawAdminPanel()
     clearButtons()
     drawChrome("ADMIN PANEL","Geschuetzter Bereich")
@@ -1794,30 +1834,22 @@ local function handleAdminButton(id)
             drawAdminPanel()
             
         elseif id == "admin_stats" then
-            clearButtons()
-            drawChrome("Statistiken","Casino-Uebersicht")
+            -- FIXED BUG #2: Use extracted function for financial overview
+            drawFinancialOverview()
 
-            local playerDia = getPlayerBalance()
-            local bankDia = getItemCountInNet(DIAMOND_ID)
-            local profit = bankDia - 500
-
-            drawBox(4,5,mw-3,13,COLOR_PANEL_DARK)
-            mcenter(6,"=== FINANZEN ===",COLOR_GOLD,COLOR_PANEL_DARK)
-            mcenter(8,"Spieler-Chips: "..playerDia,COLOR_INFO,COLOR_PANEL_DARK)
-            mcenter(9,"Casino-Bank: "..bankDia,COLOR_SUCCESS,COLOR_PANEL_DARK)
-
-            local profitColor = profit >= 0 and COLOR_SUCCESS or COLOR_WARNING
-            local profitText = profit >= 0 and "+"..profit or tostring(profit)
-            mcenter(11,"Gewinn/Verlust: "..profitText.." Dia",profitColor,COLOR_PANEL_DARK)
-            mcenter(12,"(seit Start mit 500 Bank)",colors.lightGray,COLOR_PANEL_DARK)
-
-            addButton("stats_players",4,15,mw-3,17,"Spieler-Statistiken",colors.black,colors.cyan)
-            addButton("stats_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
-            
         elseif id == "stats_back" then
-            -- Return to where we came from (main menu or admin panel)
-            if AdminState.cameFromMainMenu then
-                -- We came from main menu, return there
+            -- FIXED BUG #2: Proper navigation based on entry point
+            if mode == "stats" then
+                -- We're in stats mode from main menu, return to main menu
+                mode = "menu"
+                AdminState.cameFromMainMenu = false
+                drawMainMenu()
+            elseif AdminState.cameFromStatsOverview then
+                -- We came from financial overview in admin mode, return there
+                AdminState.cameFromStatsOverview = false
+                drawFinancialOverview()
+            elseif AdminState.cameFromMainMenu then
+                -- We came from main menu via old path, return there
                 mode = "menu"
                 AdminState.cameFromMainMenu = false
                 drawMainMenu()
@@ -1831,7 +1863,8 @@ local function handleAdminButton(id)
             end
 
         elseif id == "stats_players" then
-            AdminState.cameFromMainMenu = false  -- We're coming from admin panel
+            -- FIXED BUG #2: Track that we came from financial overview for proper back navigation
+            AdminState.cameFromStatsOverview = true
             AdminState.currentStatsOffset = 0
             drawPlayerStatsList(AdminState.currentStatsOffset)
 
@@ -3320,7 +3353,8 @@ local function handleButton(id)
         elseif id=="game_slots" and gameStatus.slots then
             mode="slots"; drawSlotsSimple()
         elseif id=="player_stats" then
-            mode="admin"
+            -- FIXED BUG #2: Use separate mode "stats" for main menu stats access
+            mode="stats"
             AdminState.cameFromMainMenu = true  -- Track that we came from main menu
             AdminState.currentStatsOffset = 0
             drawPlayerStatsList(0)
@@ -3332,7 +3366,11 @@ local function handleButton(id)
     
     elseif mode=="admin" then
         handleAdminButton(id)
-    
+
+    elseif mode=="stats" then
+        -- FIXED BUG #2: Stats mode from main menu uses same handlers as admin
+        handleAdminButton(id)
+
     elseif mode=="roulette" then
         handleRouletteButton(id)
     
