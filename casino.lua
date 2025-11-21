@@ -644,7 +644,14 @@ end
 
 -- Hole aktuell erkannte Spielernamen
 local function getCurrentPlayers()
-    return getPlayersFromDetector().names
+    local names = getPlayersFromDetector().names
+
+    -- If no players detected but currentPlayer is Guest, include Guest in the list
+    if #names == 0 and currentPlayer == "Guest" then
+        return {"Guest"}
+    end
+
+    return names
 end
 
 -- FIXED: Improved nearest player detection
@@ -731,12 +738,12 @@ local function trackPlayers()
 
     -- Zeit für alle aktuell gesehenen Spieler aktualisieren
     for playerName, _ in pairs(newSeenPlayers) do
-        if lastSeenPlayers[playerName] then
-            local stats = playerStats[playerName]
-            if stats then
-                -- 1 Sekunde hinzufügen (wird alle 1-2 Sekunden aufgerufen)
-                stats.totalTimeSpent = stats.totalTimeSpent + 1000
-            end
+        local stats = playerStats[playerName]
+        if stats then
+            -- Add time for ALL currently seen players, not just previously seen ones
+            -- This fixes Guest and new player time tracking
+            -- 2 seconds (timer is set to 2 seconds in main loop)
+            stats.totalTimeSpent = stats.totalTimeSpent + 2000
         end
     end
 
@@ -1776,14 +1783,22 @@ local function handleAdminButton(id)
             
         elseif id == "stats_back" then
             -- Return to where we came from (main menu or admin panel)
-            if AdminState.panelOpen then
+            if AdminState.cameFromMainMenu then
+                -- We came from main menu, return there
+                mode = "menu"
+                AdminState.cameFromMainMenu = false
+                drawMainMenu()
+            elseif AdminState.panelOpen then
+                -- We came from admin panel, return there
                 drawAdminPanel()
             else
+                -- Fallback to main menu
                 mode = "menu"
                 drawMainMenu()
             end
 
         elseif id == "stats_players" then
+            AdminState.cameFromMainMenu = false  -- We're coming from admin panel
             AdminState.currentStatsOffset = 0
             drawPlayerStatsList(AdminState.currentStatsOffset)
 
@@ -3273,6 +3288,7 @@ local function handleButton(id)
             mode="slots"; drawSlotsSimple()
         elseif id=="player_stats" then
             mode="admin"
+            AdminState.cameFromMainMenu = true  -- Track that we came from main menu
             AdminState.currentStatsOffset = 0
             drawPlayerStatsList(0)
         elseif id=="admin_panel" then
