@@ -608,6 +608,8 @@ local function trackPlayers()
                     longestWinStreak = 0,
                     longestLoseStreak = 0
                 }
+                -- Guest Stats direkt speichern, damit sie persistent sind
+                safeSavePlayerStats("trackPlayers - Guest created")
             end
         end
         return
