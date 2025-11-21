@@ -53,33 +53,56 @@ local STATS_PAGE_SIZE = 6  -- Anzahl der Spieler pro Seite in der Statistik-Ansi
 -- Bridge-Typen die wir suchen
 local BRIDGE_TYPES = { "meBridge", "me_bridge", "rsBridge", "rs_bridge" }
 
--- Farbschema (Enhanced UI) - Grouped to reduce local variable count
+-- Farbschema (Modern Dark Theme) - Optimized for 5x4 block monitor
 local COLORS = {
+    -- Base colors
     BG           = colors.black,
-    FRAME        = colors.lightGray,
-    HEADER_BG    = colors.purple,
-    HEADER_ACC   = colors.magenta,
+    BG_DARK      = colors.gray,
+
+    -- Header & Chrome
+    HEADER_BG    = colors.cyan,
+    HEADER_ACC   = colors.lightBlue,
     HEADER_TEXT  = colors.white,
     FOOTER_BG    = colors.gray,
-    FOOTER_TEXT  = colors.white,
+    FOOTER_TEXT  = colors.lightGray,
+    FRAME        = colors.cyan,
+
+    -- Panels & Cards
     PANEL        = colors.gray,
     PANEL_DARK   = colors.black,
+    PANEL_LIGHT  = colors.lightGray,
+    CARD_BG      = colors.gray,
+    CARD_BORDER  = colors.lightBlue,
+
+    -- Status colors
     HIGHLIGHT    = colors.lime,
     WARNING      = colors.red,
-    INFO         = colors.cyan,
+    INFO         = colors.lightBlue,
     GOLD         = colors.yellow,
-    SUCCESS      = colors.green,
-    DISABLED     = colors.lightGray,
+    SUCCESS      = colors.lime,
+    DISABLED     = colors.gray,
     ACCENT       = colors.orange,
-    -- Player Stats Theme Colors
-    STATS_HEADER = colors.purple,
-    STATS_BORDER = colors.yellow,
-    STATS_ONLINE = colors.cyan,
+
+    -- Game colors (vibrant and distinct)
+    GAME_ROULETTE  = colors.red,
+    GAME_SLOTS     = colors.purple,
+    GAME_COINFLIP  = colors.yellow,
+    GAME_HILO      = colors.orange,
+    GAME_BLACKJACK = colors.green,
+
+    -- Player Stats Theme
+    STATS_HEADER = colors.cyan,
+    STATS_BORDER = colors.lightBlue,
+    STATS_ONLINE = colors.lime,
     MEDAL_GOLD   = colors.yellow,
     MEDAL_SILVER = colors.lightGray,
     MEDAL_BRONZE = colors.orange,
-    STREAK_WIN   = colors.green,
-    STREAK_LOSS  = colors.red
+    STREAK_WIN   = colors.lime,
+    STREAK_LOSS  = colors.red,
+
+    -- Admin colors
+    ADMIN_BG     = colors.purple,
+    ADMIN_BORDER = colors.pink
 }
 
 -- Commonly used color aliases (to avoid typing COLORS. everywhere)
@@ -97,47 +120,52 @@ local COLOR_ACCENT      = COLORS.ACCENT
 -- Game-Status Datei
 local GAME_STATUS_FILE = "game_status.dat"
 
--- Zentrale Spiel-Konfiguration (Game IDs, Labels, Farben)
+-- Zentrale Spiel-Konfiguration (Game IDs, Labels, Farben) - Updated for modern theme
 local GAME_CONFIG = {
     roulette = {
         id = "roulette",
-        label = "ROULETTE",
+        label = "  ROULETTE",
+        icon = "@",
         mainButtonId = "game_roulette",
         toggleButtonId = "toggle_roulette",
-        enabledColor = colors.red,
+        enabledColor = COLORS.GAME_ROULETTE,
         enabledFg = colors.white
     },
     slots = {
         id = "slots",
-        label = "SLOTS",
+        label = "  SLOTS",
+        icon = "$",
         mainButtonId = "game_slots",
         toggleButtonId = "toggle_slots",
-        enabledColor = colors.purple,
-        enabledFg = colors.yellow
+        enabledColor = COLORS.GAME_SLOTS,
+        enabledFg = colors.white
     },
     coinflip = {
         id = "coinflip",
-        label = "MUENZWURF",
+        label = "  MUENZWURF",
+        icon = "O",
         mainButtonId = "game_coin",
         toggleButtonId = "toggle_coinflip",
-        enabledColor = colors.orange,
-        enabledFg = colors.white
+        enabledColor = COLORS.GAME_COINFLIP,
+        enabledFg = colors.black
     },
     hilo = {
         id = "hilo",
-        label = "HIGH/LOW",
+        label = "  HIGH/LOW",
+        icon = "^",
         mainButtonId = "game_hilo",
         toggleButtonId = "toggle_hilo",
-        enabledColor = colors.blue,
+        enabledColor = COLORS.GAME_HILO,
         enabledFg = colors.white
     },
     blackjack = {
         id = "blackjack",
-        label = "BLACKJACK",
+        label = "  BLACKJACK",
+        icon = "#",
         mainButtonId = "game_blackjack",
         toggleButtonId = "toggle_blackjack",
-        enabledColor = colors.black,
-        enabledFg = colors.yellow
+        enabledColor = COLORS.GAME_BLACKJACK,
+        enabledFg = colors.white
     }
 }
 
@@ -303,29 +331,40 @@ end
 local function drawChrome(title, footer)
     mclearRaw()
 
-    -- Enhanced header with gradient effect
+    -- Modern header design with double line
     monitor.setBackgroundColor(COLORS.HEADER_BG)
     monitor.setTextColor(COLORS.HEADER_TEXT)
     monitor.setCursorPos(1,1)
     monitor.write(string.rep(" ",mw))
-
-    local header = " *** "..title.." *** "
-    if #header > mw then header = header:sub(1,mw) end
-    mcenter(1,header,COLORS.HEADER_TEXT,COLORS.HEADER_BG)
-
-    monitor.setBackgroundColor(COLORS.HEADER_ACC)
     monitor.setCursorPos(1,2)
     monitor.write(string.rep(" ",mw))
 
-    -- Enhanced border
-    drawBorder(1,2,mw,mh-1,COLORS.FRAME)
+    -- Title on first line
+    local titleText = "  "..title.."  "
+    if #titleText > mw then titleText = titleText:sub(1,mw) end
+    mcenter(1,titleText,COLORS.HEADER_TEXT,COLORS.HEADER_BG)
 
-    -- Enhanced footer
+    -- Decorative line on second line
+    monitor.setBackgroundColor(COLORS.HEADER_ACC)
+    monitor.setCursorPos(1,2)
+    monitor.write(string.rep(" ",mw))
+    local divider = string.rep("=", math.min(#titleText + 4, mw-4))
+    mcenter(2,divider,COLORS.HEADER_TEXT,COLORS.HEADER_ACC)
+
+    -- Enhanced border with rounded corners effect
+    drawBorder(1,3,mw,mh-1,COLORS.FRAME)
+
+    -- Modern footer with player info
     monitor.setBackgroundColor(COLORS.FOOTER_BG)
     monitor.setCursorPos(1,mh)
     monitor.write(string.rep(" ",mw))
     if footer then
-        mcenter(mh,footer,COLORS.FOOTER_TEXT,COLORS.FOOTER_BG)
+        -- Add player name to footer if available
+        local footerText = footer
+        if currentPlayer and currentPlayer ~= "Guest" then
+            footerText = "Spieler: "..currentPlayer.." | "..footer
+        end
+        mcenter(mh,footerText,COLORS.FOOTER_TEXT,COLORS.FOOTER_BG)
     end
 
     monitor.setBackgroundColor(COLOR_BG)
@@ -1128,78 +1167,81 @@ local function drawMainMenu()
     end
 
     clearButtons()
-    drawChrome("CASINO LOUNGE","Tippe ein Spiel um zu starten")
+    drawChrome("CASINO LOUNGE","Waehle dein Gluecksspiel")
 
     local playerDia = getPlayerBalance()
     local bankDia = getItemCountInNet(DIAMOND_ID)
 
-    local x1,x2,y1,y2 = 4,mw-3,4,10
-    drawBox(x1,y1,x2,y2,COLOR_PANEL_DARK)
-    drawBorder(x1,y1,x2,y2,COLORS.FRAME)
-    
-    mcenter(5,"=== DEIN GUTHABEN ===",COLOR_GOLD,COLOR_PANEL_DARK)
-    mcenter(7,playerDia.." Diamanten",COLOR_SUCCESS,COLOR_PANEL_DARK)
-    mcenter(8,"(in Chest vor dir)",colors.lightGray,COLOR_PANEL_DARK)
-    
+    -- Balance Card (compact, modern design)
+    local cardY = 4
+    local cardW = math.floor(mw * 0.6)
+    local cardX1 = math.floor((mw - cardW) / 2)
+    local cardX2 = cardX1 + cardW
+
+    drawBox(cardX1, cardY, cardX2, cardY + 4, COLORS.CARD_BG)
+    drawBorder(cardX1, cardY, cardX2, cardY + 4, COLORS.CARD_BORDER)
+
+    mcenter(cardY + 1, "GUTHABEN", COLORS.GOLD, COLORS.CARD_BG)
+    mcenter(cardY + 2, playerDia.." Diamanten", COLOR_SUCCESS, COLORS.CARD_BG)
+
     if playerDia == 0 then
-        mcenter(11,"Lege Diamanten in die Chest!",COLOR_WARNING)
-        mcenter(12,"Richtung: "..IO_CHEST_DIR,colors.lightGray)
-    end
-    
-    if bankDia < 100 then
-        mcenter(mh-3,"[Admin] Casino-Bank niedrig: "..bankDia,colors.red)
+        mcenter(cardY + 3, "Lege Diamanten ein!", colors.white, COLORS.CARD_BG)
+    else
+        mcenter(cardY + 3, "Viel Glueck!", colors.lightGray, COLORS.CARD_BG)
     end
 
-    local btnH = 3
-    local gap = 1
-    local mid = math.floor(mw/2)
-    local startY = (playerDia == 0) and 14 or 12
+    if bankDia < 100 then
+        mcenter(cardY + 5, "[WARNUNG] Casino-Bank: "..bankDia, COLOR_WARNING)
+    end
+
+    -- Game Grid (2 columns, optimized spacing)
+    local btnH = 4
+    local gap = 2
+    local colW = math.floor((mw - 6) / 2) - 1
+    local col1X = 3
+    local col2X = col1X + colW + 3
+    local startY = cardY + 7
+
+    -- Helper function for game cards with icons
+    local function drawGameCard(config, x1, y1, x2, y2, enabled)
+        if enabled then
+            -- Draw game card with icon
+            drawBox(x1, y1, x2, y2, config.enabledColor)
+            drawBorder(x1, y1, x2, y2, colors.white)
+
+            -- Icon
+            local iconY = y1 + 1
+            mcenter(iconY, config.icon, config.enabledFg, config.enabledColor)
+
+            -- Label
+            local labelY = iconY + 1
+            mcenter(labelY, config.label, config.enabledFg, config.enabledColor)
+
+            addButton(config.mainButtonId, x1, y1, x2, y2, "", config.enabledFg, config.enabledColor)
+        else
+            drawDisabledGameButton(x1, y1, x2, y2, config.label)
+        end
+    end
 
     -- Row 1: Roulette & Slots
-    local rConfig = GAME_CONFIG.roulette
-    if gameStatus.roulette then
-        addButton(rConfig.mainButtonId, 3, startY, mid-1, startY+btnH, rConfig.label, rConfig.enabledFg, rConfig.enabledColor)
-    else
-        drawDisabledGameButton(3, startY, mid-1, startY+btnH, rConfig.label)
-    end
+    drawGameCard(GAME_CONFIG.roulette, col1X, startY, col1X + colW, startY + btnH, gameStatus.roulette)
+    drawGameCard(GAME_CONFIG.slots, col2X, startY, col2X + colW, startY + btnH, gameStatus.slots)
 
-    local sConfig = GAME_CONFIG.slots
-    if gameStatus.slots then
-        addButton(sConfig.mainButtonId, mid+1, startY, mw-2, startY+btnH, sConfig.label, sConfig.enabledFg, sConfig.enabledColor)
-    else
-        drawDisabledGameButton(mid+1, startY, mw-2, startY+btnH, sConfig.label)
-    end
-
-    startY = startY + btnH + gap + 1
+    startY = startY + btnH + gap
 
     -- Row 2: Coinflip & High/Low
-    local cConfig = GAME_CONFIG.coinflip
-    if gameStatus.coinflip then
-        addButton(cConfig.mainButtonId, 3, startY, mid-1, startY+btnH, cConfig.label, cConfig.enabledFg, cConfig.enabledColor)
-    else
-        drawDisabledGameButton(3, startY, mid-1, startY+btnH, cConfig.label)
-    end
+    drawGameCard(GAME_CONFIG.coinflip, col1X, startY, col1X + colW, startY + btnH, gameStatus.coinflip)
+    drawGameCard(GAME_CONFIG.hilo, col2X, startY, col2X + colW, startY + btnH, gameStatus.hilo)
 
-    local hConfig = GAME_CONFIG.hilo
-    if gameStatus.hilo then
-        addButton(hConfig.mainButtonId, mid+1, startY, mw-2, startY+btnH, hConfig.label, hConfig.enabledFg, hConfig.enabledColor)
-    else
-        drawDisabledGameButton(mid+1, startY, mw-2, startY+btnH, hConfig.label)
-    end
+    startY = startY + btnH + gap
 
-    startY = startY + btnH + gap + 1
+    -- Row 3: Blackjack (full width)
+    drawGameCard(GAME_CONFIG.blackjack, col1X, startY, col2X + colW, startY + btnH, gameStatus.blackjack)
 
-    -- Row 3: Blackjack
-    local bConfig = GAME_CONFIG.blackjack
-    if gameStatus.blackjack then
-        addButton(bConfig.mainButtonId, 3, startY, mw-2, startY+btnH, bConfig.label, bConfig.enabledFg, bConfig.enabledColor)
-    else
-        drawDisabledGameButton(3, startY, mw-2, startY+btnH, bConfig.label)
-    end
-
-    addButton("admin_panel",mw-6,mh-2,mw-2,mh-1,"[A]",colors.gray,COLOR_BG)
-    
-    mcenter(mh-2,"Viel Glueck!",colors.lightGray)
+    -- Bottom buttons (Stats & Admin)
+    local btnY = mh - 2
+    addButton("player_stats", 3, btnY, math.floor(mw/2)-1, btnY, "STATS", colors.white, COLORS.INFO)
+    addButton("admin_panel", math.floor(mw/2)+1, btnY, mw-2, btnY, "ADMIN", colors.white, COLORS.ADMIN_BG)
 end
 
 ------------- ADMIN PANEL --------------
@@ -1477,37 +1519,44 @@ end
 
 local function drawAdminPanel()
     clearButtons()
-    drawChrome("Admin-Panel","Geschuetzter Bereich")
-    
+    drawChrome("ADMIN PANEL","Geschuetzter Bereich")
+
     local playerDia = getPlayerBalance()
     local bankDia = getItemCountInNet(DIAMOND_ID)
-    
-    drawBox(4,4,mw-3,12,COLOR_PANEL_DARK)
-    drawBorder(4,4,mw-3,12,colors.orange)
-    
-    mcenter(5,"=== CASINO STATUS ===",colors.orange,COLOR_PANEL_DARK)
-    mcenter(7,"Spieler-Chest: "..playerDia.." Dia",COLOR_INFO,COLOR_PANEL_DARK)
-    mcenter(8,"Casino-Bank: "..bankDia.." Dia",COLOR_SUCCESS,COLOR_PANEL_DARK)
-    mcenter(10,"Monitor: "..mw.."x"..mh,colors.lightGray,COLOR_PANEL_DARK)
-    mcenter(11,"IO-Richtung: "..IO_CHEST_DIR,colors.lightGray,COLOR_PANEL_DARK)
 
+    -- Status Card (modern design)
+    drawBox(4,4,mw-3,12,COLORS.ADMIN_BG)
+    drawBorder(4,4,mw-3,12,COLORS.ADMIN_BORDER)
+
+    mcenter(5,"CASINO STATUS",COLORS.ADMIN_BORDER,COLORS.ADMIN_BG)
+    mcenter(7,"Spieler-Chest: "..playerDia.." Dia",colors.white,COLORS.ADMIN_BG)
+    mcenter(8,"Casino-Bank: "..bankDia.." Dia",colors.yellow,COLORS.ADMIN_BG)
+    mcenter(10,"Monitor: "..mw.."x"..mh,colors.lightGray,COLORS.ADMIN_BG)
+    mcenter(11,"IO-Richtung: "..IO_CHEST_DIR,colors.lightGray,COLORS.ADMIN_BG)
+
+    -- Warning Box (if needed)
     if pendingPayout > 0 then
         drawBox(4,14,mw-3,17,COLOR_WARNING)
+        drawBorder(4,14,mw-3,17,colors.white)
         mcenter(15,"Offene Gewinne: "..pendingPayout.." Dia",colors.white,COLOR_WARNING)
         mcenter(16,"Kiste leeren & im Menue pruefen",colors.white,COLOR_WARNING)
     elseif bankDia < 100 then
         drawBox(4,14,mw-3,17,COLOR_WARNING)
+        drawBorder(4,14,mw-3,17,colors.white)
         mcenter(15,"WARNUNG!",colors.white,COLOR_WARNING)
         mcenter(16,"Casino-Bank zu niedrig!",colors.white,COLOR_WARNING)
     end
-    
+
+    -- Action Buttons (modern card style)
     local btnY = 19
-    addButton("admin_collect",4,btnY,math.floor(mw/2)-1,btnY+2,"Chest leeren\n(Collect)",colors.black,colors.orange)
-    addButton("admin_refill",math.floor(mw/2)+1,btnY,mw-3,btnY+2,"Bank fuellen\n(Refill)",colors.black,colors.cyan)
+    local mid = math.floor(mw/2)
+
+    addButton("admin_collect",4,btnY,mid-1,btnY+2,"Chest leeren\n(Collect)",colors.white,colors.orange)
+    addButton("admin_refill",mid+1,btnY,mw-3,btnY+2,"Bank fuellen\n(Refill)",colors.white,colors.cyan)
 
     btnY = btnY + 4
-    addButton("admin_stats",4,btnY,math.floor(mw/2)-1,btnY+2,"Statistiken",colors.white,COLOR_PANEL)
-    addButton("admin_games",math.floor(mw/2)+1,btnY,mw-3,btnY+2,"Spiele\nverwalten",colors.black,COLOR_HIGHLIGHT)
+    addButton("admin_stats",4,btnY,mid-1,btnY+2,"Spieler\nStatistiken",colors.white,COLORS.INFO)
+    addButton("admin_games",mid+1,btnY,mw-3,btnY+2,"Spiele\nverwalten",colors.white,COLORS.SUCCESS)
 
     addButton("admin_close",3,mh-3,mw-2,mh-2,"<< Schliessen",colors.white,COLOR_WARNING)
 end
