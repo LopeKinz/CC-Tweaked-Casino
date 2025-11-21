@@ -702,27 +702,9 @@ local function trackPlayers()
     if #detected.names == 0 then
         if not currentPlayer then
             currentPlayer = "Guest"
-            if not playerStats["Guest"] then
-                playerStats["Guest"] = {
-                    name = "Guest",
-                    firstSeen = os.epoch("utc"),
-                    lastSeen = os.epoch("utc"),
-                    totalVisits = 0,
-                    totalTimeSpent = 0,
-                    gamesPlayed = 0,
-                    totalWagered = 0,
-                    totalWon = 0,
-                    totalLost = 0,
-                    biggestWin = 0,
-                    biggestLoss = 0,
-                    currentStreak = 0,
-                    longestWinStreak = 0,
-                    longestLoseStreak = 0
-                }
-                safeSavePlayerStats("trackPlayers - Guest created")
-            end
         end
-        return
+        -- Use Guest as the only detected player to ensure stats are tracked
+        detected.names = {"Guest"}
     end
 
     local currentTime = os.epoch("utc")
@@ -1354,7 +1336,7 @@ local function drawPlayerStatsList(offset)
         mcenter(9,"Spiele ein paar Runden,",colors.lightGray,COLOR_PANEL_DARK)
         mcenter(10,"um Statistiken zu sammeln!",colors.lightGray,COLOR_PANEL_DARK)
 
-        addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
+        addButton("stats_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
         return
     end
 
@@ -1427,7 +1409,7 @@ local function drawPlayerStatsList(offset)
         addButton("stats_next",math.floor(mw/2)+1,btnY,mw-3,btnY+1,"Naechste >>",colors.black,COLOR_INFO)
     end
 
-    addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLORS.STATS_HEADER)
+    addButton("stats_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLORS.STATS_HEADER)
 end
 
 -- Detail-Ansicht eines Spielers
@@ -1810,9 +1792,6 @@ local function handleAdminButton(id)
         elseif id:match("^stats_player_") then
             local playerName = id:match("^stats_player_(.+)$")
             drawPlayerStatsDetail(playerName)
-
-        elseif id == "player_stats_list" then
-            drawPlayerStatsList(AdminState.currentStatsOffset or 0)
 
         elseif id == "player_detail_back" then
             drawPlayerStatsList(AdminState.currentStatsOffset or 0)
