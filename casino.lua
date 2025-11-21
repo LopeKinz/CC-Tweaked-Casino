@@ -1,5 +1,13 @@
 -- casino.lua - CASINO LOUNGE (RS Bridge Support, Pending-Payout Lock)
--- Version 3.x
+-- Version 4.0 - Enhanced UI & Admin Game Management
+--
+-- Changelog v4.0:
+-- + Admin can now activate/deactivate games
+-- + Enhanced UI with better colors and visual feedback
+-- + Improved button rendering with multi-line support
+-- + Better error handling for file operations
+-- + Visual indicators for disabled games
+-- + Persistent game state (saves/loads)
 
 ---------------- CONFIG ----------------
 
@@ -9,14 +17,14 @@ local IO_CHEST_DIR = "front"  -- Richtung der IO-Chest von der Bridge aus
 -- Bridge-Typen die wir suchen
 local BRIDGE_TYPES = { "meBridge", "me_bridge", "rsBridge", "rs_bridge" }
 
--- Farbschema
+-- Farbschema (Enhanced UI)
 local COLOR_BG          = colors.black
-local COLOR_FRAME       = colors.gray
+local COLOR_FRAME       = colors.lightGray
 local COLOR_HEADER_BG   = colors.purple
-local COLOR_HEADER_ACC  = colors.pink
+local COLOR_HEADER_ACC  = colors.magenta
 local COLOR_HEADER_TEXT = colors.white
 local COLOR_FOOTER_BG   = colors.gray
-local COLOR_FOOTER_TEXT = colors.lightGray
+local COLOR_FOOTER_TEXT = colors.white
 local COLOR_PANEL       = colors.gray
 local COLOR_PANEL_DARK  = colors.black
 local COLOR_HIGHLIGHT   = colors.lime
@@ -24,6 +32,67 @@ local COLOR_WARNING     = colors.red
 local COLOR_INFO        = colors.cyan
 local COLOR_GOLD        = colors.yellow
 local COLOR_SUCCESS     = colors.green
+local COLOR_DISABLED    = colors.lightGray
+local COLOR_ACCENT      = colors.orange
+
+-- Game-Status Datei
+local GAME_STATUS_FILE = "game_status.dat"
+
+-- Standard: Alle Spiele aktiv
+local gameStatus = {
+    roulette = true,
+    slots = true,
+    coinflip = true,
+    hilo = true,
+    blackjack = true
+}
+
+-- Lade Game-Status aus Datei
+local function loadGameStatus()
+    local success, err = pcall(function()
+        if fs.exists(GAME_STATUS_FILE) then
+            local file = fs.open(GAME_STATUS_FILE, "r")
+            if file then
+                local data = file.readAll()
+                file.close()
+                if data and data ~= "" then
+                    local decoded = textutils.unserialise(data)
+                    if decoded and type(decoded) == "table" then
+                        gameStatus = decoded
+                        print("[INFO] Game-Status geladen")
+                    else
+                        print("[WARNUNG] Game-Status Datei korrupt, verwende Standard")
+                    end
+                end
+            end
+        else
+            print("[INFO] Keine Game-Status Datei gefunden, alle Spiele aktiv")
+        end
+    end)
+    if not success then
+        print("[FEHLER] Fehler beim Laden des Game-Status: " .. tostring(err))
+    end
+end
+
+-- Speichere Game-Status in Datei
+local function saveGameStatus()
+    local success, err = pcall(function()
+        local file = fs.open(GAME_STATUS_FILE, "w")
+        if file then
+            file.write(textutils.serialise(gameStatus))
+            file.close()
+            print("[INFO] Game-Status gespeichert")
+        else
+            print("[FEHLER] Konnte Game-Status Datei nicht oeffnen")
+        end
+    end)
+    if not success then
+        print("[FEHLER] Fehler beim Speichern des Game-Status: " .. tostring(err))
+    end
+end
+
+-- Lade Status beim Start
+loadGameStatus()
 
 --------------- PERIPHERALS ------------
 
@@ -114,13 +183,14 @@ end
 
 local function drawChrome(title, footer)
     mclearRaw()
-    
+
+    -- Enhanced header with gradient effect
     monitor.setBackgroundColor(COLOR_HEADER_BG)
     monitor.setTextColor(COLOR_HEADER_TEXT)
     monitor.setCursorPos(1,1)
     monitor.write(string.rep(" ",mw))
-    
-    local header = " ** "..title.." ** "
+
+    local header = " *** "..title.." *** "
     if #header > mw then header = header:sub(1,mw) end
     mcenter(1,header,COLOR_HEADER_TEXT,COLOR_HEADER_BG)
 
@@ -128,8 +198,10 @@ local function drawChrome(title, footer)
     monitor.setCursorPos(1,2)
     monitor.write(string.rep(" ",mw))
 
+    -- Enhanced border
     drawBorder(1,2,mw,mh-1,COLOR_FRAME)
 
+    -- Enhanced footer
     monitor.setBackgroundColor(COLOR_FOOTER_BG)
     monitor.setCursorPos(1,mh)
     monitor.write(string.rep(" ",mw))
@@ -154,23 +226,37 @@ local function addButton(id,x1,y1,x2,y2,label,fg,bg)
         id=id,x1=x1,y1=y1,x2=x2,y2=y2,
         label=label,fg=fg or colors.white,bg=bg or COLOR_PANEL
     })
-    
+
+    -- Draw button background
     drawBox(x1,y1,x2,y2,bg or COLOR_PANEL)
-    
-    monitor.setTextColor(COLOR_FRAME)
+
+    -- Draw subtle top border for 3D effect
+    monitor.setTextColor(colors.white)
     for x=x1,x2 do
         monitor.setCursorPos(x,y1)
         monitor.write("-")
     end
-    
-    local w = x2-x1+1
-    local tx = x1 + math.floor((w-#label)/2)
-    local ty = math.floor((y1+y2)/2)
-    if tx < x1 then tx = x1 end
-    if tx + #label -1 > x2 then
-        label = label:sub(1,x2-tx+1)
+
+    -- Handle multi-line labels
+    local lines = {}
+    for line in label:gmatch("[^\n]+") do
+        table.insert(lines, line)
     end
-    mwrite(tx,ty,label,fg,bg)
+
+    -- Center text vertically and horizontally
+    local h = y2-y1+1
+    local startY = y1 + math.floor((h - #lines) / 2)
+
+    for i, line in ipairs(lines) do
+        local w = x2-x1+1
+        local tx = x1 + math.floor((w-#line)/2)
+        local ty = startY + i - 1
+        if tx < x1 then tx = x1 end
+        if tx + #line - 1 > x2 then
+            line = line:sub(1,x2-tx+1)
+        end
+        mwrite(tx,ty,line,fg,bg)
+    end
 end
 
 local function hitButton(x,y)
@@ -665,17 +751,64 @@ local function drawMainMenu()
     local gap = 1
     local mid = math.floor(mw/2)
     local startY = (playerDia == 0) and 14 or 12
-    
-    addButton("game_roulette",3,startY,mid-1,startY+btnH,"ROULETTE",colors.white,colors.red)
-    addButton("game_slots",   mid+1,startY,mw-2,startY+btnH,"SLOTS",colors.yellow,colors.purple)
-    
+
+    -- Row 1: Roulette & Slots
+    if gameStatus.roulette then
+        addButton("game_roulette",3,startY,mid-1,startY+btnH,"ROULETTE",colors.white,colors.red)
+    else
+        drawBox(3,startY,mid-1,startY+btnH,COLOR_DISABLED)
+        local label = "ROULETTE"
+        local labelX = 3 + math.floor((mid-1-3+1-#label)/2)
+        mwrite(labelX,startY+1,label,colors.gray,COLOR_DISABLED)
+        mwrite(labelX,startY+2,"[DEAKTIVIERT]",colors.gray,COLOR_DISABLED)
+    end
+
+    if gameStatus.slots then
+        addButton("game_slots",mid+1,startY,mw-2,startY+btnH,"SLOTS",colors.yellow,colors.purple)
+    else
+        drawBox(mid+1,startY,mw-2,startY+btnH,COLOR_DISABLED)
+        local label = "SLOTS"
+        local labelX = mid+1 + math.floor((mw-2-(mid+1)+1-#label)/2)
+        mwrite(labelX,startY+1,label,colors.gray,COLOR_DISABLED)
+        mwrite(labelX,startY+2,"[DEAKTIVIERT]",colors.gray,COLOR_DISABLED)
+    end
+
     startY = startY + btnH + gap + 1
-    addButton("game_coin",    3,startY,mid-1,startY+btnH,"MUENZWURF",colors.white,colors.orange)
-    addButton("game_hilo",    mid+1,startY,mw-2,startY+btnH,"HIGH/LOW",colors.white,colors.blue)
-    
+
+    -- Row 2: Coinflip & High/Low
+    if gameStatus.coinflip then
+        addButton("game_coin",3,startY,mid-1,startY+btnH,"MUENZWURF",colors.white,colors.orange)
+    else
+        drawBox(3,startY,mid-1,startY+btnH,COLOR_DISABLED)
+        local label = "MUENZWURF"
+        local labelX = 3 + math.floor((mid-1-3+1-#label)/2)
+        mwrite(labelX,startY+1,label,colors.gray,COLOR_DISABLED)
+        mwrite(labelX,startY+2,"[DEAKTIVIERT]",colors.gray,COLOR_DISABLED)
+    end
+
+    if gameStatus.hilo then
+        addButton("game_hilo",mid+1,startY,mw-2,startY+btnH,"HIGH/LOW",colors.white,colors.blue)
+    else
+        drawBox(mid+1,startY,mw-2,startY+btnH,COLOR_DISABLED)
+        local label = "HIGH/LOW"
+        local labelX = mid+1 + math.floor((mw-2-(mid+1)+1-#label)/2)
+        mwrite(labelX,startY+1,label,colors.gray,COLOR_DISABLED)
+        mwrite(labelX,startY+2,"[DEAKTIVIERT]",colors.gray,COLOR_DISABLED)
+    end
+
     startY = startY + btnH + gap + 1
-    addButton("game_blackjack",3,startY,mw-2,startY+btnH,"BLACKJACK",colors.yellow,colors.black)
-    
+
+    -- Row 3: Blackjack
+    if gameStatus.blackjack then
+        addButton("game_blackjack",3,startY,mw-2,startY+btnH,"BLACKJACK",colors.yellow,colors.black)
+    else
+        drawBox(3,startY,mw-2,startY+btnH,COLOR_DISABLED)
+        local label = "BLACKJACK"
+        local labelX = 3 + math.floor((mw-2-3+1-#label)/2)
+        mwrite(labelX,startY+1,label,colors.gray,COLOR_DISABLED)
+        mwrite(labelX,startY+2,"[DEAKTIVIERT]",colors.gray,COLOR_DISABLED)
+    end
+
     addButton("admin_panel",mw-6,mh-2,mw-2,mh-1,"[A]",colors.gray,COLOR_BG)
     
     mcenter(mh-2,"Viel Glueck!",colors.lightGray)
@@ -871,11 +1004,73 @@ local function drawAdminPanel()
     local btnY = 19
     addButton("admin_collect",4,btnY,math.floor(mw/2)-1,btnY+2,"Chest leeren\n(Collect)",colors.black,colors.orange)
     addButton("admin_refill",math.floor(mw/2)+1,btnY,mw-3,btnY+2,"Bank fuellen\n(Refill)",colors.black,colors.cyan)
-    
+
     btnY = btnY + 4
-    addButton("admin_stats",4,btnY,mw-3,btnY+2,"Statistiken",colors.white,COLOR_PANEL)
-    
+    addButton("admin_stats",4,btnY,math.floor(mw/2)-1,btnY+2,"Statistiken",colors.white,COLOR_PANEL)
+    addButton("admin_games",math.floor(mw/2)+1,btnY,mw-3,btnY+2,"Spiele\nverwalten",colors.black,COLOR_HIGHLIGHT)
+
     addButton("admin_close",3,mh-3,mw-2,mh-2,"<< Schliessen",colors.white,COLOR_WARNING)
+end
+
+local function drawGameManagement()
+    clearButtons()
+    drawChrome("Game Management","Spiele aktivieren/deaktivieren")
+
+    drawBox(4,4,mw-3,10,COLOR_PANEL_DARK)
+    drawBorder(4,4,mw-3,10,colors.orange)
+
+    mcenter(5,"=== SPIEL-VERWALTUNG ===",colors.orange,COLOR_PANEL_DARK)
+    mcenter(7,"Aktiviere oder deaktiviere Spiele",colors.lightGray,COLOR_PANEL_DARK)
+    mcenter(8,"Deaktivierte Spiele sind ausgegraut",colors.lightGray,COLOR_PANEL_DARK)
+
+    local btnY = 12
+    local btnH = 3
+    local gap = 1
+    local mid = math.floor(mw/2)
+
+    -- Roulette
+    local rouletteColor = gameStatus.roulette and colors.red or COLOR_DISABLED
+    local rouletteFg = gameStatus.roulette and colors.white or colors.gray
+    local rouletteLabel = "ROULETTE " .. (gameStatus.roulette and "[AN]" or "[AUS]")
+    addButton("toggle_roulette",4,btnY,mid-1,btnY+btnH,rouletteLabel,rouletteFg,rouletteColor)
+
+    -- Slots
+    local slotsColor = gameStatus.slots and colors.purple or COLOR_DISABLED
+    local slotsFg = gameStatus.slots and colors.yellow or colors.gray
+    local slotsLabel = "SLOTS " .. (gameStatus.slots and "[AN]" or "[AUS]")
+    addButton("toggle_slots",mid+1,btnY,mw-3,btnY+btnH,slotsLabel,slotsFg,slotsColor)
+
+    btnY = btnY + btnH + gap + 1
+
+    -- Coinflip
+    local coinColor = gameStatus.coinflip and colors.orange or COLOR_DISABLED
+    local coinFg = gameStatus.coinflip and colors.white or colors.gray
+    local coinLabel = "MUENZWURF " .. (gameStatus.coinflip and "[AN]" or "[AUS]")
+    addButton("toggle_coinflip",4,btnY,mid-1,btnY+btnH,coinLabel,coinFg,coinColor)
+
+    -- High/Low
+    local hiloColor = gameStatus.hilo and colors.blue or COLOR_DISABLED
+    local hiloFg = gameStatus.hilo and colors.white or colors.gray
+    local hiloLabel = "HIGH/LOW " .. (gameStatus.hilo and "[AN]" or "[AUS]")
+    addButton("toggle_hilo",mid+1,btnY,mw-3,btnY+btnH,hiloLabel,hiloFg,hiloColor)
+
+    btnY = btnY + btnH + gap + 1
+
+    -- Blackjack
+    local bjColor = gameStatus.blackjack and colors.black or COLOR_DISABLED
+    local bjFg = gameStatus.blackjack and colors.yellow or colors.gray
+    local bjLabel = "BLACKJACK " .. (gameStatus.blackjack and "[AN]" or "[AUS]")
+    addButton("toggle_blackjack",4,btnY,mw-3,btnY+btnH,bjLabel,bjFg,bjColor)
+
+    -- Info message
+    local activeCount = 0
+    for _, status in pairs(gameStatus) do
+        if status then activeCount = activeCount + 1 end
+    end
+
+    mcenter(mh-5,"Aktive Spiele: " .. activeCount .. " / 5",COLOR_INFO)
+
+    addButton("game_mgmt_back",3,mh-3,mw-2,mh-2,"<< Zurueck zum Admin-Panel",colors.white,COLOR_PANEL)
 end
 
 local function handleAdminButton(id)
@@ -1026,6 +1221,20 @@ local function handleAdminButton(id)
 
         elseif id == "player_detail_back" then
             drawPlayerStatsList(0)
+
+        elseif id == "admin_games" then
+            drawGameManagement()
+
+        elseif id == "game_mgmt_back" then
+            drawAdminPanel()
+
+        elseif id:match("^toggle_") then
+            local gameName = id:match("^toggle_(.+)$")
+            if gameStatus[gameName] ~= nil then
+                gameStatus[gameName] = not gameStatus[gameName]
+                saveGameStatus()
+                drawGameManagement()
+            end
 
         elseif id == "admin_close" then
             admin_panel_open = false
@@ -2335,12 +2544,17 @@ local function handleButton(id)
             return
         end
 
-        if id=="game_roulette" then mode="roulette"; drawRouletteSimple()
-        elseif id=="game_coin" then mode="coin"; c_state="stake"; c_drawStake()
-        elseif id=="game_hilo" then mode="hilo"; drawHiloSimple()
-        elseif id=="game_blackjack" then mode="blackjack"; drawBlackjackSimple()
-        elseif id=="game_slots" then mode="slots"; drawSlotsSimple()
-        elseif id=="admin_panel" then 
+        if id=="game_roulette" and gameStatus.roulette then
+            mode="roulette"; drawRouletteSimple()
+        elseif id=="game_coin" and gameStatus.coinflip then
+            mode="coin"; c_state="stake"; c_drawStake()
+        elseif id=="game_hilo" and gameStatus.hilo then
+            mode="hilo"; drawHiloSimple()
+        elseif id=="game_blackjack" and gameStatus.blackjack then
+            mode="blackjack"; drawBlackjackSimple()
+        elseif id=="game_slots" and gameStatus.slots then
+            mode="slots"; drawSlotsSimple()
+        elseif id=="admin_panel" then
             mode="admin"
             admin_pin_input = ""
             drawAdminPinEntry()
