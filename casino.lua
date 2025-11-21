@@ -1,5 +1,12 @@
 -- casino.lua - CASINO LOUNGE (RS Bridge Support, Pending-Payout Lock)
--- Version 4.2.3 - UI Text Rendering Fix
+-- Version 4.2.4 - Player Detector Fix
+--
+-- Changelog v4.2.4:
+-- + FIXED: Player Detector now properly handles both string and table player data
+-- + FIXED: Improved error handling with pcall for getPlayersInRange
+-- + FIXED: Better fallback to Guest when no players detected
+-- + FIXED: Consistent player name extraction from detector results
+-- + FIXED: Removed redundant peripheral presence checks
 --
 -- Changelog v4.2.3:
 -- + FIXED: Game card text now visible (was being overwritten by addButton)
@@ -592,43 +599,44 @@ end
 -- Gibt {players = {...}, names = {...}} zurueck
 -- players: Array von Player-Objekten vom Detector
 -- names: Array von Spielernamen (String)
+-- FIXED: Proper player detection with error handling
+-- Returns {players = {...}, names = {...}}
+-- Based on reference code from rs_display.lua
 local function getPlayersFromDetector()
-    -- Check if player_detector peripheral is still present
-    if player_detector then
-        local detectorName = peripheral.getName(player_detector)
-        if not detectorName or not peripheral.isPresent(detectorName) then
-            print("[PLAYER DETECTOR] Player Detector wurde entfernt!")
-            player_detector = nil
-        end
-    end
-
     if not player_detector then
-        print("[PLAYER DETECTOR] Kein Player Detector verfuegbar")
         return {players = {}, names = {}}
     end
 
+    -- Use pcall to safely call getPlayersInRange
     local ok, playersInRange = pcall(player_detector.getPlayersInRange, PLAYER_DETECTION_RANGE)
+
     if not ok then
-        print("[PLAYER DETECTOR] Fehler beim Abrufen der Spieler: "..tostring(playersInRange))
+        print("[PLAYER DETECTOR] Fehler beim Abrufen: "..tostring(playersInRange))
         return {players = {}, names = {}}
     end
 
-    if not playersInRange then
-        print("[PLAYER DETECTOR] Keine Spieler in Reichweite ("..PLAYER_DETECTION_RANGE.." Bloecke)")
+    if not playersInRange or type(playersInRange) ~= "table" then
         return {players = {}, names = {}}
     end
 
+    -- Extract player names - handle both string and table formats
     local names = {}
-    for _, player in ipairs(playersInRange) do
-        if player and player.name then
-            table.insert(names, player.name)
+    for _, p in ipairs(playersInRange) do
+        if type(p) == "string" then
+            -- Direct string format
+            table.insert(names, p)
+        elseif type(p) == "table" then
+            -- Table format - check for name or username field
+            if p.name then
+                table.insert(names, p.name)
+            elseif p.username then
+                table.insert(names, p.username)
+            end
         end
     end
 
     if #names > 0 then
         print("[PLAYER DETECTOR] "..#names.." Spieler erkannt: "..table.concat(names, ", "))
-    else
-        print("[PLAYER DETECTOR] Keine Spieler in Reichweite ("..PLAYER_DETECTION_RANGE.." Bloecke)")
     end
 
     return {players = playersInRange, names = names}
@@ -639,43 +647,48 @@ local function getCurrentPlayers()
     return getPlayersFromDetector().names
 end
 
--- Ermittle den nächsten Spieler am Terminal (für Statistikerfassung)
--- Akzeptiert bereits ermittelte Detector-Daten um Doppelabfragen zu vermeiden
---
--- WICHTIG: Die x/y/z Koordinaten vom Player Detector sind RELATIV zum Detector-Block.
--- Das bedeutet: (0,0,0) = Detector-Position, und distanceSq = x^2+y^2+z^2 ist die
--- quadrierte Distanz vom Detector (korrekt für nächsten Spieler).
+-- FIXED: Improved nearest player detection
 local function getNearestPlayer(detected)
     if not detected or not detected.players or #detected.players == 0 then
         return nil
     end
 
-    -- Nimm einfach den ersten/nächsten Spieler
-    -- Bei mehreren Spielern: der mit der kürzesten Distanz vom Detector
     local nearestPlayer = nil
-    local minDistanceSq = math.huge  -- Verwende quadrierte Distanz um sqrt zu vermeiden
+    local minDistanceSq = math.huge
 
     for _, player in ipairs(detected.players) do
-        if player and player.name then
-            -- Nur Spieler mit gültigen Koordinaten berücksichtigen
-            if player.x and player.y and player.z then
-                -- Distanz vom Detector (Koordinaten sind relativ zum Detector)
+        local playerName = nil
+
+        -- Extract player name based on type
+        if type(player) == "string" then
+            playerName = player
+        elseif type(player) == "table" then
+            playerName = player.name or player.username
+        end
+
+        if playerName then
+            -- Check if we have coordinate data (only for table format)
+            if type(player) == "table" and player.x and player.y and player.z then
                 local distanceSq = player.x^2 + player.y^2 + player.z^2
                 local distance = math.sqrt(distanceSq)
-                print("[NEAREST PLAYER] "..player.name.." - Distanz: "..string.format("%.2f", distance).." Bloecke (x="..player.x..", y="..player.y..", z="..player.z..")")
+                print("[NEAREST PLAYER] "..playerName.." - Distanz: "..string.format("%.2f", distance).." Bloecke")
+
                 if distanceSq < minDistanceSq then
                     minDistanceSq = distanceSq
-                    nearestPlayer = player.name
+                    nearestPlayer = playerName
                 end
             else
-                print("[NEAREST PLAYER] "..player.name.." - Keine Koordinaten verfuegbar")
+                -- No coordinates available - just take first player
+                if not nearestPlayer then
+                    nearestPlayer = playerName
+                    print("[NEAREST PLAYER] "..playerName.." - Keine Koordinaten, nehme ersten Spieler")
+                end
             end
-            -- Spieler ohne Koordinaten werden ignoriert (kein Fallback)
         end
     end
 
     if nearestPlayer then
-        print("[NEAREST PLAYER] Ausgewaehlt: "..nearestPlayer.." (Distanz: "..string.format("%.2f", math.sqrt(minDistanceSq)).." Bloecke)")
+        print("[NEAREST PLAYER] Ausgewaehlt: "..nearestPlayer)
     end
 
     return nearestPlayer
@@ -685,20 +698,17 @@ end
 local function trackPlayers()
     local detected = getPlayersFromDetector()
 
-    -- Fallback: Wenn kein Player Detector vorhanden oder keine Spieler erkannt,
-    -- verwende einen Standard-Spielernamen für Stats-Attribution
-    -- Guest wird für Spielstatistiken verwendet, aber nicht als "besuchender" Spieler getrackt
-    if #detected.players == 0 then
+    -- Fallback to Guest if no players detected
+    if #detected.names == 0 then
         if not currentPlayer then
             currentPlayer = "Guest"
-            -- Erstelle Guest Stats wenn nicht vorhanden (nur für Spiel-Attribution)
             if not playerStats["Guest"] then
                 playerStats["Guest"] = {
                     name = "Guest",
                     firstSeen = os.epoch("utc"),
                     lastSeen = os.epoch("utc"),
-                    totalVisits = 0,  -- Bleibt 0 für Guest
-                    totalTimeSpent = 0,  -- Wird nicht für Guest getrackt
+                    totalVisits = 0,
+                    totalTimeSpent = 0,
                     gamesPlayed = 0,
                     totalWagered = 0,
                     totalWon = 0,
@@ -709,7 +719,6 @@ local function trackPlayers()
                     longestWinStreak = 0,
                     longestLoseStreak = 0
                 }
-                -- Guest Stats direkt speichern, damit sie persistent sind
                 safeSavePlayerStats("trackPlayers - Guest created")
             end
         end
@@ -719,19 +728,15 @@ local function trackPlayers()
     local currentTime = os.epoch("utc")
     local newSeenPlayers = {}
 
-    for _, player in ipairs(detected.players) do
-        if player and player.name then
-            local playerName = player.name
-            newSeenPlayers[playerName] = true
+    for _, playerName in ipairs(detected.names) do
+        newSeenPlayers[playerName] = true
 
-            local stats = getOrCreatePlayerStats(playerName)
-            stats.lastSeen = currentTime
+        local stats = getOrCreatePlayerStats(playerName)
+        stats.lastSeen = currentTime
 
-            -- Neuer Besuch?
-            if not lastSeenPlayers[playerName] then
-                stats.totalVisits = stats.totalVisits + 1
-                print("[TRACKING] Neuer Besuch von: "..playerName.." (Besuch #"..stats.totalVisits..")")
-            end
+        if not lastSeenPlayers[playerName] then
+            stats.totalVisits = stats.totalVisits + 1
+            print("[TRACKING] Neuer Besuch von: "..playerName.." (Besuch #"..stats.totalVisits..")")
         end
     end
 
