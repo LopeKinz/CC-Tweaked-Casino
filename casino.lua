@@ -1,5 +1,10 @@
 -- casino.lua - CASINO LOUNGE (RS Bridge Support, Pending-Payout Lock)
--- Version 4.2.2 - UI & Player Detector Bugfix
+-- Version 4.2.3 - UI Text Rendering Fix
+--
+-- Changelog v4.2.3:
+-- + FIXED: Game card text now visible (was being overwritten by addButton)
+-- + Button registration now separated from drawing to prevent text overwrites
+-- + Game cards now properly show icons and labels on colored backgrounds
 --
 -- Changelog v4.2.2:
 -- + FIXED: Game card icons/labels now centered within card boundaries (not full monitor)
@@ -1217,13 +1222,22 @@ local function drawMainMenu()
     -- Helper function for game cards with icons
     local function drawGameCard(config, x1, y1, x2, y2, enabled)
         if enabled then
-            -- Draw game card with icon
+            -- Draw game card background and border
             drawBox(x1, y1, x2, y2, config.enabledColor)
             drawBorder(x1, y1, x2, y2, colors.white)
 
+            -- Register button WITHOUT drawing (just add to buttons table)
+            table.insert(buttons,{
+                id=config.mainButtonId,
+                x1=x1, y1=y1, x2=x2, y2=y2,
+                label="", fg=config.enabledFg, bg=config.enabledColor
+            })
+
+            -- Now draw icon and label (they won't be overwritten)
+            local cardWidth = x2 - x1 + 1
+
             -- Icon (centered within card, not full monitor)
             local iconY = y1 + 1
-            local cardWidth = x2 - x1 + 1
             local iconX = x1 + math.floor((cardWidth - #config.icon) / 2)
             mwrite(iconX, iconY, config.icon, config.enabledFg, config.enabledColor)
 
@@ -1231,8 +1245,6 @@ local function drawMainMenu()
             local labelY = iconY + 1
             local labelX = x1 + math.floor((cardWidth - #config.label) / 2)
             mwrite(labelX, labelY, config.label, config.enabledFg, config.enabledColor)
-
-            addButton(config.mainButtonId, x1, y1, x2, y2, "", config.enabledFg, config.enabledColor)
         else
             drawDisabledGameButton(x1, y1, x2, y2, config.label)
         end
