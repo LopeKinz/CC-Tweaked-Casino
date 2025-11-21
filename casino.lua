@@ -1120,6 +1120,7 @@ end
 local mode = "menu"
 local currentPlayer = nil
 local gameInProgress = false  -- Issue #6: Lock currentPlayer during active games
+local nextGameMode = nil  -- Track which game to start after player selection
 
 -- Admin State (grouped)
 local AdminState = {
@@ -1313,6 +1314,64 @@ local function drawMainMenu()
     local btnY = mh - 2
     addButton("player_stats", 3, btnY, math.floor(mw/2)-1, btnY, "STATS", colors.white, COLORS.INFO)
     addButton("admin_panel", math.floor(mw/2)+1, btnY, mw-2, btnY, "ADMIN", colors.white, COLORS.ADMIN_BG)
+end
+
+------------- PLAYER SELECTION --------------
+
+-- Player selection screen before starting a game
+local function drawPlayerSelection()
+    clearButtons()
+    drawChrome("Spieler waehlen","Wer spielt?")
+
+    -- Get all currently detected players
+    local availablePlayers = getCurrentPlayers()
+
+    -- Always add Guest as fallback option
+    local hasGuest = false
+    for _, name in ipairs(availablePlayers) do
+        if name == "Guest" then
+            hasGuest = true
+            break
+        end
+    end
+    if not hasGuest then
+        table.insert(availablePlayers, "Guest")
+    end
+
+    -- Display info box
+    drawBox(4, 5, mw-3, 8, COLOR_PANEL_DARK)
+    mcenter(6, "Waehle den Spieler aus, der", colors.lightGray, COLOR_PANEL_DARK)
+    mcenter(7, "gerade spielen moechte:", colors.lightGray, COLOR_PANEL_DARK)
+
+    -- Calculate button layout
+    local startY = 10
+    local btnHeight = 2
+    local gap = 1
+    local maxButtons = 6  -- Maximum players to show at once
+
+    -- Show available players as buttons
+    local displayCount = math.min(#availablePlayers, maxButtons)
+    for i = 1, displayCount do
+        local playerName = availablePlayers[i]
+        local y1 = startY + (i-1) * (btnHeight + gap)
+        local y2 = y1 + btnHeight
+
+        -- Highlight current player with different color
+        local btnColor = COLOR_PANEL
+        local fgColor = colors.white
+        if playerName == currentPlayer then
+            btnColor = COLORS.INFO
+            fgColor = colors.black
+        elseif playerName == "Guest" then
+            btnColor = colors.gray
+            fgColor = colors.white
+        end
+
+        addButton("select_player_"..playerName, 5, y1, mw-4, y2, playerName, fgColor, btnColor)
+    end
+
+    -- Back button
+    addButton("player_select_back", 4, mh-3, mw-3, mh-2, "<< Zurueck", colors.white, COLOR_WARNING)
 end
 
 ------------- ADMIN PANEL --------------
@@ -1902,6 +1961,52 @@ local function handleAdminButton(id)
             mode="menu"
             drawMainMenu()
         end
+    end
+end
+
+------------- PLAYER SELECTION HANDLER --------------
+
+local function handlePlayerSelectionButton(id)
+    if id:match("^select_player_") then
+        -- Extract player name from button ID
+        local selectedPlayer = id:match("^select_player_(.+)$")
+
+        if selectedPlayer then
+            -- Set the selected player as current player
+            currentPlayer = selectedPlayer
+            print("[PLAYER SELECT] Spieler gewaehlt: "..selectedPlayer)
+
+            -- Start the game that was requested
+            if nextGameMode == "roulette" then
+                mode = "roulette"
+                r_drawChooseType()
+            elseif nextGameMode == "coin" then
+                mode = "coin"
+                c_state = "stake"
+                c_player = nil
+                c_drawStake()
+            elseif nextGameMode == "hilo" then
+                mode = "hilo"
+                h_drawStake()
+            elseif nextGameMode == "blackjack" then
+                mode = "blackjack"
+                bj_drawStake()
+            elseif nextGameMode == "slots" then
+                mode = "slots"
+                s_drawStake()
+            else
+                -- Fallback to menu if no game specified
+                mode = "menu"
+                drawMainMenu()
+            end
+
+            nextGameMode = nil  -- Reset
+        end
+    elseif id == "player_select_back" then
+        -- Return to main menu
+        mode = "menu"
+        nextGameMode = nil
+        drawMainMenu()
     end
 end
 
@@ -3343,15 +3448,30 @@ local function handleButton(id)
         end
 
         if id=="game_roulette" and gameStatus.roulette then
-            mode="roulette"; drawRouletteSimple()
+            -- Show player selection before starting game
+            nextGameMode = "roulette"
+            mode = "player_select"
+            drawPlayerSelection()
         elseif id=="game_coin" and gameStatus.coinflip then
-            mode="coin"; c_state="stake"; c_player = nil; c_drawStake()
+            -- Show player selection before starting game
+            nextGameMode = "coin"
+            mode = "player_select"
+            drawPlayerSelection()
         elseif id=="game_hilo" and gameStatus.hilo then
-            mode="hilo"; drawHiloSimple()
+            -- Show player selection before starting game
+            nextGameMode = "hilo"
+            mode = "player_select"
+            drawPlayerSelection()
         elseif id=="game_blackjack" and gameStatus.blackjack then
-            mode="blackjack"; drawBlackjackSimple()
+            -- Show player selection before starting game
+            nextGameMode = "blackjack"
+            mode = "player_select"
+            drawPlayerSelection()
         elseif id=="game_slots" and gameStatus.slots then
-            mode="slots"; drawSlotsSimple()
+            -- Show player selection before starting game
+            nextGameMode = "slots"
+            mode = "player_select"
+            drawPlayerSelection()
         elseif id=="player_stats" then
             -- FIXED BUG #2: Use separate mode "stats" for main menu stats access
             mode="stats"
@@ -3370,6 +3490,10 @@ local function handleButton(id)
     elseif mode=="stats" then
         -- FIXED BUG #2: Stats mode from main menu uses same handlers as admin
         handleAdminButton(id)
+
+    elseif mode=="player_select" then
+        -- Player selection mode handler
+        handlePlayerSelectionButton(id)
 
     elseif mode=="roulette" then
         handleRouletteButton(id)
