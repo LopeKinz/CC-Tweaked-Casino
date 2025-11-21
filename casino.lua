@@ -1,0 +1,2082 @@
+-- casino.lua - CASINO LOUNGE (RS Bridge Support, Pending-Payout Lock)
+-- Version 3.x
+
+---------------- CONFIG ----------------
+
+local DIAMOND_ID = "minecraft:diamond"
+local IO_CHEST_DIR = "front"  -- Richtung der IO-Chest von der Bridge aus
+
+-- Bridge-Typen die wir suchen
+local BRIDGE_TYPES = { "meBridge", "me_bridge", "rsBridge", "rs_bridge" }
+
+-- Farbschema
+local COLOR_BG          = colors.black
+local COLOR_FRAME       = colors.gray
+local COLOR_HEADER_BG   = colors.purple
+local COLOR_HEADER_ACC  = colors.pink
+local COLOR_HEADER_TEXT = colors.white
+local COLOR_FOOTER_BG   = colors.gray
+local COLOR_FOOTER_TEXT = colors.lightGray
+local COLOR_PANEL       = colors.gray
+local COLOR_PANEL_DARK  = colors.black
+local COLOR_HIGHLIGHT   = colors.lime
+local COLOR_WARNING     = colors.red
+local COLOR_INFO        = colors.cyan
+local COLOR_GOLD        = colors.yellow
+local COLOR_SUCCESS     = colors.green
+
+--------------- PERIPHERALS ------------
+
+local monitor = peripheral.find("monitor")
+if not monitor then error("Kein Monitor gefunden") end
+
+monitor.setTextScale(0.5)
+local mw, mh = monitor.getSize()
+
+-- Bridge suchen
+local bridge
+for _, t in ipairs(BRIDGE_TYPES) do
+    bridge = peripheral.find(t)
+    if bridge then 
+        print("Bridge gefunden: " .. peripheral.getName(bridge))
+        break 
+    end
+end
+if not bridge then
+    error("Keine meBridge/rsBridge gefunden!")
+end
+
+print("Casino gestartet auf Monitor: " .. peripheral.getName(monitor))
+print("Monitor-Größe: " .. mw .. "x" .. mh)
+print("IO-Chest Richtung: " .. IO_CHEST_DIR)
+
+math.randomseed(os.epoch("utc"))
+
+--------------- UI-HELPER --------------
+
+local function mclearRaw()
+    monitor.setBackgroundColor(COLOR_BG)
+    monitor.setTextColor(colors.white)
+    monitor.clear()
+end
+
+local function mwrite(x,y,text,fg,bg)
+    if y < 1 or y > mh then return end
+    if bg then monitor.setBackgroundColor(bg) end
+    if fg then monitor.setTextColor(fg) end
+    monitor.setCursorPos(x,y)
+    monitor.write(text)
+end
+
+local function mcenter(y,text,fg,bg)
+    text = tostring(text)
+    local x = math.floor((mw - #text)/2)+1
+    if x < 1 then x = 1 end
+    mwrite(x,y,text,fg,bg)
+end
+
+local function drawBox(x1,y1,x2,y2,bg)
+    monitor.setBackgroundColor(bg or COLOR_PANEL)
+    for y=y1,y2 do
+        monitor.setCursorPos(x1,y)
+        monitor.write(string.rep(" ",x2-x1+1))
+    end
+end
+
+local function drawBorder(x1,y1,x2,y2,color)
+    monitor.setTextColor(color or COLOR_FRAME)
+    for x=x1,x2 do
+        monitor.setCursorPos(x,y1)
+        monitor.write("-")
+        monitor.setCursorPos(x,y2)
+        monitor.write("-")
+    end
+    for y=y1,y2 do
+        monitor.setCursorPos(x1,y)
+        monitor.write("|")
+        monitor.setCursorPos(x2,y)
+        monitor.write("|")
+    end
+    monitor.setCursorPos(x1,y1); monitor.write("+")
+    monitor.setCursorPos(x2,y1); monitor.write("+")
+    monitor.setCursorPos(x1,y2); monitor.write("+")
+    monitor.setCursorPos(x2,y2); monitor.write("+")
+end
+
+local function drawChrome(title, footer)
+    mclearRaw()
+    
+    monitor.setBackgroundColor(COLOR_HEADER_BG)
+    monitor.setTextColor(COLOR_HEADER_TEXT)
+    monitor.setCursorPos(1,1)
+    monitor.write(string.rep(" ",mw))
+    
+    local header = " ** "..title.." ** "
+    if #header > mw then header = header:sub(1,mw) end
+    mcenter(1,header,COLOR_HEADER_TEXT,COLOR_HEADER_BG)
+
+    monitor.setBackgroundColor(COLOR_HEADER_ACC)
+    monitor.setCursorPos(1,2)
+    monitor.write(string.rep(" ",mw))
+
+    drawBorder(1,2,mw,mh-1,COLOR_FRAME)
+
+    monitor.setBackgroundColor(COLOR_FOOTER_BG)
+    monitor.setCursorPos(1,mh)
+    monitor.write(string.rep(" ",mw))
+    if footer then
+        mcenter(mh,footer,COLOR_FOOTER_TEXT,COLOR_FOOTER_BG)
+    end
+
+    monitor.setBackgroundColor(COLOR_BG)
+    monitor.setTextColor(colors.white)
+end
+
+-------------- BUTTONS -----------------
+
+local buttons = {}
+
+local function clearButtons()
+    buttons = {}
+end
+
+local function addButton(id,x1,y1,x2,y2,label,fg,bg)
+    table.insert(buttons,{
+        id=id,x1=x1,y1=y1,x2=x2,y2=y2,
+        label=label,fg=fg or colors.white,bg=bg or COLOR_PANEL
+    })
+    
+    drawBox(x1,y1,x2,y2,bg or COLOR_PANEL)
+    
+    monitor.setTextColor(COLOR_FRAME)
+    for x=x1,x2 do
+        monitor.setCursorPos(x,y1)
+        monitor.write("-")
+    end
+    
+    local w = x2-x1+1
+    local tx = x1 + math.floor((w-#label)/2)
+    local ty = math.floor((y1+y2)/2)
+    if tx < x1 then tx = x1 end
+    if tx + #label -1 > x2 then
+        label = label:sub(1,x2-tx+1)
+    end
+    mwrite(tx,ty,label,fg,bg)
+end
+
+local function hitButton(x,y)
+    for _,b in ipairs(buttons) do
+        if x>=b.x1 and x<=b.x2 and y>=b.y1 and y<=b.y2 then
+            return b.id
+        end
+    end
+    return nil
+end
+
+----------- INVENTAR / STORAGE ------------
+
+-- Diamanten im Netzwerk zählen (Casino-Bank-Reserve)
+local function getItemCountInNet(name)
+    local ok, res = pcall(bridge.getItem, { name = name })
+    if not ok or not res then return 0 end
+    return res.amount or res.count or 0
+end
+
+-- Diamanten in IO-Chest zählen (Spieler-Guthaben)
+-- nutzt RS-/ME-bridge listItems(Direction)
+-- Diamanten in IO-Chest zählen (Spieler-Guthaben)
+-- 1) zuerst über die Bridge (Chest an RS/ME)
+-- 2) falls das nichts liefert, direkt die Chest als Peripherie auslesen
+local function getPlayerBalance()
+    -- 1. Versuch: über die Bridge (Chest ist an der Bridge auf IO_CHEST_DIR angeschlossen)
+    if bridge and bridge.listItems then
+        local ok, items = pcall(bridge.listItems, IO_CHEST_DIR)
+        if ok and type(items) == "table" then
+            local total = 0
+            -- pairs statt ipairs, falls die Bridge eine Map zurückgibt
+            for _, item in pairs(items) do
+                if item.name == DIAMOND_ID then
+                    total = total + (item.count or item.amount or 0)
+                end
+            end
+            if total > 0 then
+                return total
+            end
+        end
+    end
+
+    -- 2. Versuch: Chest direkt vor dem Computer auslesen
+    -- IO_CHEST_DIR = Seite vom Computer aus (z.B. "front")
+    local chest = peripheral.wrap(IO_CHEST_DIR)
+    if chest and chest.list then
+        local total = 0
+        local ok, list = pcall(chest.list)
+        if ok and type(list) == "table" then
+            for _, stack in pairs(list) do
+                if stack.name == DIAMOND_ID then
+                    total = total + (stack.count or 0)
+                end
+            end
+        end
+        return total
+    end
+
+    -- Wenn alles schief geht: 0
+    return 0
+end
+
+
+-- Einsatz: Nimm Diamanten aus IO-Chest und packe sie ins Netzwerk (Casino-Bank)
+local function takeStake(amount)
+    amount = tonumber(amount) or 0
+    if amount <= 0 then return 0 end
+
+    print(("[EINSATZ] Nehme %d Diamanten aus IO-Chest '%s'"):format(amount, IO_CHEST_DIR))
+    
+    local ok, imported = pcall(bridge.importItem,
+        { name = DIAMOND_ID, count = amount },
+        IO_CHEST_DIR
+    )
+    
+    if not ok then
+        print("[FEHLER] importItem:", imported)
+        return 0
+    end
+    
+    local result = imported or 0
+    print("[EINSATZ] Genommen:", result)
+    return result
+end
+
+------------- PENDING PAYOUT --------------
+
+-- Offene (nicht auszahlbare) Gewinne, falls Kiste voll ist
+-- Offene Gewinne, falls Kiste voll ist
+local pendingPayout = 0
+local payoutBlocked = false
+
+-- maximale Menge, die pro Versuch exportiert wird
+local MAX_EXPORT_CHUNK = 4096   -- kannst du bei Bedarf anpassen
+
+
+local function rawExportDiamonds(amount)
+    amount = tonumber(amount) or 0
+    if amount <= 0 then return 0 end
+
+    print(("[GEWINN-RAW] Versuche %d Diamanten nach '%s' zu exportieren"):format(amount, IO_CHEST_DIR))
+
+    local ok, exported = pcall(bridge.exportItem,
+        { name = DIAMOND_ID, count = amount },
+        IO_CHEST_DIR
+    )
+
+    if not ok then
+        print("[FEHLER] exportItem:", exported)
+        return 0
+    end
+
+    exported = exported or 0
+    print("[GEWINN-RAW] Tatsächlich exportiert:", exported)
+    return exported
+end
+
+
+local function flushPendingPayoutIfPossible()
+    pendingPayout = tonumber(pendingPayout) or 0
+    if pendingPayout <= 0 then
+        payoutBlocked = false
+        return
+    end
+
+    -- Wie viele Diamanten sind überhaupt in der Bank?
+    local inBank = getItemCountInNet(DIAMOND_ID)
+    if inBank <= 0 then
+        print("[WARNUNG] Bank hat keine Diamanten, offen bleiben: "..pendingPayout)
+        payoutBlocked = true
+        return
+    end
+
+    -- Wir versuchen nur einen kleineren Chunk auszuzahlen
+    local toTry = math.min(pendingPayout, inBank, MAX_EXPORT_CHUNK)
+
+    print(("[INFO] Versuche offenen Gewinn auszuzahlen: %d | Versuche: %d"):format(pendingPayout, toTry))
+
+    local exported = rawExportDiamonds(toTry)
+
+    if exported <= 0 then
+        -- Kiste vermutlich (wieder) voll oder Bridge-Fehler
+        payoutBlocked = true
+        print("[WARNUNG] Kiste vermutlich voll oder Bridge-Fehler, weiterhin offen: "..pendingPayout)
+        return
+    end
+
+    pendingPayout = pendingPayout - exported
+    if pendingPayout <= 0 then
+        pendingPayout = 0
+        payoutBlocked = false
+        print("[INFO] Ausstehender Gewinn vollständig ausgezahlt.")
+    else
+        payoutBlocked = true
+        print("[WARNUNG] Nur teilweise nachgezahlt, Rest: "..pendingPayout)
+    end
+end
+
+
+-- Gewinn: Zahle Diamanten aus Netzwerk (Casino-Bank) in IO-Chest
+local function payPayout(amount)
+    amount = tonumber(amount) or 0
+
+    -- Erst versuchen, offene Gewinne weiter auszuzahlen
+    flushPendingPayoutIfPossible()
+
+    -- Kein neuer Gewinn -> nur offene prüfen
+    if amount <= 0 then
+        return 0
+    end
+
+    print(("[GEWINN] Zahle %d Diamanten aus in IO-Chest '%s'"):format(amount, IO_CHEST_DIR))
+
+    local exported = rawExportDiamonds(amount)
+
+    if exported < amount then
+        local notPaid = amount - exported
+        pendingPayout = (tonumber(pendingPayout) or 0) + notPaid
+        payoutBlocked = true
+        print("[WARNUNG] Nicht alles passte in die Kiste. Offen dazu: "..notPaid.." | Gesamt offen: "..pendingPayout)
+    else
+        print("[GEWINN] Ausgezahlt:", exported)
+    end
+
+    return exported
+end
+
+
+------------- GLOBAL STATE -------------
+
+local mode = "menu"
+
+-- Admin
+local ADMIN_PIN = "1234"
+local admin_panel_open = false
+local admin_pin_input = ""
+
+-- Roulette
+local r_state = "type"
+local r_betType, r_choice, r_stake = nil, nil, 0
+local r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
+
+-- Coinflip
+local c_state, c_stake, c_choice = "stake", 0, nil
+local c_lastWin, c_lastPayout, c_lastSide = false, 0, nil
+
+-- High/Low
+local h_state, h_stake = "stake", 0
+local h_startNum, h_nextNum, h_choice = nil, nil, nil
+local h_lastWin, h_lastPayout, h_lastPush = false, 0, false
+
+-- Blackjack
+local bj_state, bj_stake = "stake", 0
+local bj_playerHand, bj_dealerHand, bj_deck = {}, {}, {}
+local bj_lastWin, bj_lastPayout, bj_lastResult = false, 0, ""
+
+-- Slots
+local s_state, s_bet = "setup", 1
+local s_grid = {{},{},{}}
+local s_lastWin, s_lastMult, s_lastPayout = false, 0, 0
+local s_freeSpins, s_totalWin, s_winLines = 0, 0, {}
+local s_freeSpinBet = 0  -- merkt sich Einsatz, mit dem Freispiele erspielt wurden
+
+local slotSymbols = {
+    {sym="7",   weight=1,  name="Lucky 7"},
+    {sym="BAR", weight=2,  name="Bar"},
+    {sym="DIA", weight=3,  name="Diamant"},
+    {sym="$",   weight=4,  name="Dollar"},
+    {sym="CHR", weight=5,  name="Cherry"},
+    {sym="STR", weight=5,  name="Stern"},
+    {sym="BEL", weight=6,  name="Glocke"},
+    {sym="FS",  weight=1,  name="Free Spin"},
+}
+
+local winLines = {
+    {name="Linie 1", path={{1,1},{1,2},{1,3}}},
+    {name="Linie 2", path={{2,1},{2,2},{2,3}}},
+    {name="Linie 3", path={{3,1},{3,2},{3,3}}},
+    {name="Diag 1",  path={{1,1},{2,2},{3,3}}},
+    {name="Diag 2",  path={{3,1},{2,2},{1,3}}},
+}
+
+----------- PENDING PAYOUT SCREEN ------------
+
+local function drawPendingPayoutScreen()
+    clearButtons()
+    drawChrome("CASINO LOUNGE","Auszahlung ausstehend")
+
+    local x1, y1, x2, y2 = 4, 5, mw-3, mh-5
+    drawBox(x1,y1,x2,y2,COLOR_PANEL_DARK)
+    drawBorder(x1,y1,x2,y2,COLOR_WARNING)
+
+    mcenter(y1+1,"AUSZAHLUNG AUSSTEHEND!",COLOR_WARNING,COLOR_PANEL_DARK)
+    mcenter(y1+3,"Es sind noch Gewinne offen:",COLOR_INFO,COLOR_PANEL_DARK)
+    mcenter(y1+4,tostring(pendingPayout).." Diamanten",COLOR_GOLD,COLOR_PANEL_DARK)
+    mcenter(y1+6,"Bitte leere die Chest vor dir",colors.white,COLOR_PANEL_DARK)
+    mcenter(y1+7,"und druecke 'Erneut pruefen'.",colors.white,COLOR_PANEL_DARK)
+
+    if payoutBlocked then
+        mcenter(y1+9,"(Kiste war zuvor voll)",colors.lightGray,COLOR_PANEL_DARK)
+    end
+
+    local btnY = mh-3
+    addButton("pending_check",4,btnY,mw-3,btnY+1,"Erneut pruefen",colors.black,COLOR_HIGHLIGHT)
+    addButton("admin_panel",mw-6,2,mw-2,3,"[A]",colors.gray,COLOR_BG)
+end
+
+local function checkPayoutLock()
+    pendingPayout = tonumber(pendingPayout) or 0
+    if pendingPayout > 0 then
+        mode = "payout"
+        drawPendingPayoutScreen()
+        return true
+    end
+    return false
+end
+
+----------- HAUPTMENÜ ------------------
+
+local function drawMainMenu()
+    -- Versuch, ausstehende Gewinne nachzuzahlen
+    flushPendingPayoutIfPossible()
+    if (pendingPayout or 0) > 0 then
+        mode = "payout"
+        drawPendingPayoutScreen()
+        return
+    end
+
+    clearButtons()
+    drawChrome("CASINO LOUNGE","Tippe ein Spiel um zu starten")
+
+    local playerDia = getPlayerBalance()
+    local bankDia = getItemCountInNet(DIAMOND_ID)
+
+    local x1,x2,y1,y2 = 4,mw-3,4,10
+    drawBox(x1,y1,x2,y2,COLOR_PANEL_DARK)
+    drawBorder(x1,y1,x2,y2,COLOR_FRAME)
+    
+    mcenter(5,"=== DEIN GUTHABEN ===",COLOR_GOLD,COLOR_PANEL_DARK)
+    mcenter(7,playerDia.." Diamanten",COLOR_SUCCESS,COLOR_PANEL_DARK)
+    mcenter(8,"(in Chest vor dir)",colors.lightGray,COLOR_PANEL_DARK)
+    
+    if playerDia == 0 then
+        mcenter(11,"Lege Diamanten in die Chest!",COLOR_WARNING)
+        mcenter(12,"Richtung: "..IO_CHEST_DIR,colors.lightGray)
+    end
+    
+    if bankDia < 100 then
+        mcenter(mh-3,"[Admin] Casino-Bank niedrig: "..bankDia,colors.red)
+    end
+
+    local btnH = 3
+    local gap = 1
+    local mid = math.floor(mw/2)
+    local startY = (playerDia == 0) and 14 or 12
+    
+    addButton("game_roulette",3,startY,mid-1,startY+btnH,"ROULETTE",colors.white,colors.red)
+    addButton("game_slots",   mid+1,startY,mw-2,startY+btnH,"SLOTS",colors.yellow,colors.purple)
+    
+    startY = startY + btnH + gap + 1
+    addButton("game_coin",    3,startY,mid-1,startY+btnH,"MUENZWURF",colors.white,colors.orange)
+    addButton("game_hilo",    mid+1,startY,mw-2,startY+btnH,"HIGH/LOW",colors.white,colors.blue)
+    
+    startY = startY + btnH + gap + 1
+    addButton("game_blackjack",3,startY,mw-2,startY+btnH,"BLACKJACK",colors.yellow,colors.black)
+    
+    addButton("admin_panel",mw-6,mh-2,mw-2,mh-1,"[A]",colors.gray,COLOR_BG)
+    
+    mcenter(mh-2,"Viel Glueck!",colors.lightGray)
+end
+
+------------- ADMIN PANEL --------------
+
+local function drawAdminPinEntry()
+    clearButtons()
+    drawChrome("Admin-Panel","PIN eingeben")
+    
+    drawBox(5,6,mw-4,10,COLOR_PANEL_DARK)
+    drawBorder(5,6,mw-4,10,colors.orange)
+    
+    mcenter(7,"Admin-Zugang",colors.orange,COLOR_PANEL_DARK)
+    mcenter(8,"PIN: "..string.rep("*",#admin_pin_input),colors.white,COLOR_PANEL_DARK)
+    
+    local btnSize = 4
+    local gap = 1
+    local startX = math.floor((mw - (btnSize*3 + gap*2))/2)
+    local startY = 12
+    
+    for i=1,3 do
+        local x1 = startX + (i-1)*(btnSize+gap)
+        addButton("pin_"..i, x1,startY,x1+btnSize-1,startY+2, tostring(i), colors.white, COLOR_PANEL)
+    end
+    
+    startY = startY + 3 + gap
+    for i=4,6 do
+        local x1 = startX + (i-4)*(btnSize+gap)
+        addButton("pin_"..i, x1,startY,x1+btnSize-1,startY+2, tostring(i), colors.white, COLOR_PANEL)
+    end
+    
+    startY = startY + 3 + gap
+    for i=7,9 do
+        local x1 = startX + (i-7)*(btnSize+gap)
+        addButton("pin_"..i, x1,startY,x1+btnSize-1,startY+2, tostring(i), colors.white, COLOR_PANEL)
+    end
+    
+    startY = startY + 3 + gap
+    addButton("pin_clear", startX,startY,startX+btnSize-1,startY+2, "CLR", colors.white, COLOR_WARNING)
+    addButton("pin_0", startX+btnSize+gap,startY,startX+btnSize+gap+btnSize-1,startY+2, "0", colors.white, COLOR_PANEL)
+    addButton("pin_ok", startX+(btnSize+gap)*2,startY,startX+(btnSize+gap)*2+btnSize-1,startY+2, "OK", colors.black, COLOR_HIGHLIGHT)
+    
+    addButton("admin_cancel",3,mh-3,mw-2,mh-2,"<< Abbrechen",colors.white,COLOR_WARNING)
+end
+
+local function drawAdminPanel()
+    clearButtons()
+    drawChrome("Admin-Panel","Geschuetzter Bereich")
+    
+    local playerDia = getPlayerBalance()
+    local bankDia = getItemCountInNet(DIAMOND_ID)
+    
+    drawBox(4,4,mw-3,12,COLOR_PANEL_DARK)
+    drawBorder(4,4,mw-3,12,colors.orange)
+    
+    mcenter(5,"=== CASINO STATUS ===",colors.orange,COLOR_PANEL_DARK)
+    mcenter(7,"Spieler-Chest: "..playerDia.." Dia",COLOR_INFO,COLOR_PANEL_DARK)
+    mcenter(8,"Casino-Bank: "..bankDia.." Dia",COLOR_SUCCESS,COLOR_PANEL_DARK)
+    mcenter(10,"Monitor: "..mw.."x"..mh,colors.lightGray,COLOR_PANEL_DARK)
+    mcenter(11,"IO-Richtung: "..IO_CHEST_DIR,colors.lightGray,COLOR_PANEL_DARK)
+
+    if pendingPayout > 0 then
+        drawBox(4,14,mw-3,17,COLOR_WARNING)
+        mcenter(15,"Offene Gewinne: "..pendingPayout.." Dia",colors.white,COLOR_WARNING)
+        mcenter(16,"Kiste leeren & im Menue pruefen",colors.white,COLOR_WARNING)
+    elseif bankDia < 100 then
+        drawBox(4,14,mw-3,17,COLOR_WARNING)
+        mcenter(15,"WARNUNG!",colors.white,COLOR_WARNING)
+        mcenter(16,"Casino-Bank zu niedrig!",colors.white,COLOR_WARNING)
+    end
+    
+    local btnY = 19
+    addButton("admin_collect",4,btnY,math.floor(mw/2)-1,btnY+2,"Chest leeren\n(Collect)",colors.black,colors.orange)
+    addButton("admin_refill",math.floor(mw/2)+1,btnY,mw-3,btnY+2,"Bank fuellen\n(Refill)",colors.black,colors.cyan)
+    
+    btnY = btnY + 4
+    addButton("admin_stats",4,btnY,mw-3,btnY+2,"Statistiken",colors.white,COLOR_PANEL)
+    
+    addButton("admin_close",3,mh-3,mw-2,mh-2,"<< Schliessen",colors.white,COLOR_WARNING)
+end
+
+local function handleAdminButton(id)
+    if not admin_panel_open then
+        if id:match("^pin_%d$") then
+            local digit = id:match("^pin_(%d)$")
+            if #admin_pin_input < 6 then
+                admin_pin_input = admin_pin_input .. digit
+                drawAdminPinEntry()
+            end
+        elseif id == "pin_clear" then
+            admin_pin_input = ""
+            drawAdminPinEntry()
+        elseif id == "pin_ok" then
+            if admin_pin_input == ADMIN_PIN then
+                admin_panel_open = true
+                admin_pin_input = ""
+                drawAdminPanel()
+            else
+                clearButtons()
+                drawChrome("Zugriff verweigert","Falscher PIN")
+                drawBox(5,8,mw-4,12,COLOR_WARNING)
+                mcenter(9,"FALSCHER PIN!",colors.white,COLOR_WARNING)
+                mcenter(10,"Zugriff verweigert",colors.white,COLOR_WARNING)
+                admin_pin_input = ""
+                sleep(2)
+                mode="menu"
+                drawMainMenu()
+            end
+        elseif id == "admin_cancel" then
+            admin_pin_input = ""
+            mode="menu"
+            drawMainMenu()
+        end
+    else
+        if id == "admin_collect" then
+            clearButtons()
+            drawChrome("Chest leeren","Sammle Spieler-Chips ein")
+            
+            local playerDia = getPlayerBalance()
+            if playerDia == 0 then
+                drawBox(5,8,mw-4,11,COLOR_WARNING)
+                mcenter(9,"Chest ist leer!",colors.white,COLOR_WARNING)
+                sleep(1.5)
+                drawAdminPanel()
+                return
+            end
+            
+            drawBox(5,8,mw-4,11,COLOR_INFO)
+            mcenter(9,"Importiere "..playerDia.." Diamanten...",colors.white,COLOR_INFO)
+            
+            local collected = takeStake(playerDia)
+            
+            sleep(0.5)
+            drawBox(5,13,mw-4,16,COLOR_SUCCESS)
+            mcenter(14,"Erfolgreich!",colors.white,COLOR_SUCCESS)
+            mcenter(15,"+"..collected.." zur Bank",colors.white,COLOR_SUCCESS)
+            sleep(2)
+            drawAdminPanel()
+            
+        elseif id == "admin_refill" then
+            clearButtons()
+            drawChrome("Bank fuellen","Fuege Diamanten hinzu")
+            
+            local bankDia = getItemCountInNet(DIAMOND_ID)
+            local targetAmount = 500
+            local needed = targetAmount - bankDia
+            
+            if needed <= 0 then
+                drawBox(5,8,mw-4,11,COLOR_SUCCESS)
+                mcenter(9,"Bank ist voll!",colors.white,COLOR_SUCCESS)
+                mcenter(10,"("..bankDia.." Diamanten)",colors.white,COLOR_SUCCESS)
+                sleep(1.5)
+                drawAdminPanel()
+                return
+            end
+            
+            drawBox(5,8,mw-4,11,COLOR_INFO)
+            mcenter(9,"Bank hat: "..bankDia,colors.white,COLOR_INFO)
+            mcenter(10,"Benoetigt: "..needed.." mehr",colors.white,COLOR_INFO)
+            
+            sleep(1.5)
+            drawBox(5,13,mw-4,16,colors.orange)
+            mcenter(14,"Lege Diamanten in Chest",colors.white,colors.orange)
+            mcenter(15,"und druecke OK!",colors.white,colors.orange)
+            
+            clearButtons()
+            addButton("refill_ok",4,mh-5,math.floor(mw/2)-1,mh-3,"OK",colors.black,COLOR_HIGHLIGHT)
+            addButton("refill_cancel",math.floor(mw/2)+1,mh-5,mw-3,mh-3,"Abbruch",colors.white,COLOR_WARNING)
+            
+        elseif id == "refill_ok" then
+            clearButtons()
+            drawChrome("Fuellen...","Bitte warten")
+            
+            local playerDia = getPlayerBalance()
+            drawBox(5,8,mw-4,11,COLOR_INFO)
+            mcenter(9,"Importiere "..playerDia.." Diamanten...",colors.white,COLOR_INFO)
+            
+            if playerDia > 0 then
+                local added = takeStake(playerDia)
+                sleep(0.5)
+                drawBox(5,13,mw-4,16,COLOR_SUCCESS)
+                mcenter(14,"Bank aufgefuellt!",colors.white,COLOR_SUCCESS)
+                mcenter(15,"+"..added.." Diamanten",colors.white,COLOR_SUCCESS)
+            else
+                drawBox(5,13,mw-4,16,COLOR_WARNING)
+                mcenter(14,"Keine Diamanten gefunden!",colors.white,COLOR_WARNING)
+            end
+            sleep(2)
+            drawAdminPanel()
+            
+        elseif id == "refill_cancel" then
+            drawAdminPanel()
+            
+        elseif id == "admin_stats" then
+            clearButtons()
+            drawChrome("Statistiken","Casino-Uebersicht")
+            
+            local playerDia = getPlayerBalance()
+            local bankDia = getItemCountInNet(DIAMOND_ID)
+            local profit = bankDia - 500
+            
+            drawBox(4,5,mw-3,16,COLOR_PANEL_DARK)
+            mcenter(6,"=== FINANZEN ===",COLOR_GOLD,COLOR_PANEL_DARK)
+            mcenter(8,"Spieler-Chips: "..playerDia,COLOR_INFO,COLOR_PANEL_DARK)
+            mcenter(9,"Casino-Bank: "..bankDia,COLOR_SUCCESS,COLOR_PANEL_DARK)
+            
+            local profitColor = profit >= 0 and COLOR_SUCCESS or COLOR_WARNING
+            local profitText = profit >= 0 and "+"..profit or tostring(profit)
+            mcenter(11,"Gewinn/Verlust:",colors.white,COLOR_PANEL_DARK)
+            mcenter(12,profitText.." Diamanten",profitColor,COLOR_PANEL_DARK)
+            mcenter(14,"(seit Start mit 500 Bank)",colors.lightGray,COLOR_PANEL_DARK)
+            
+            addButton("stats_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
+            
+        elseif id == "stats_back" then
+            drawAdminPanel()
+            
+        elseif id == "admin_close" then
+            admin_panel_open = false
+            mode="menu"
+            drawMainMenu()
+        end
+    end
+end
+
+------------- ROULETTE -----------------
+
+local redNumbers = {
+  [1]=true,[3]=true,[5]=true,[7]=true,[9]=true,
+  [12]=true,[14]=true,[16]=true,[18]=true,
+  [19]=true,[21]=true,[23]=true,[25]=true,[27]=true,
+  [30]=true,[32]=true,[34]=true,[36]=true
+}
+
+local function getColor(num)
+  if num == 0 then return "green" end
+  if redNumbers[num] then return "red" else return "black" end
+end
+
+local function spinWheel()
+  return math.random(0,36)
+end
+
+local function resolveRoulette(betType, choice, result)
+  local color = getColor(result)
+  local hit = false
+  local mult = 0
+
+  if betType == 1 then
+    if result == choice then hit = true; mult = 36 end
+  elseif betType == 2 then
+    if result ~= 0 and color == choice then hit = true; mult = 2 end
+  elseif betType == 3 then
+    if result ~= 0 then
+      local even = (result % 2 == 0)
+      if choice == "even" and even then hit = true; mult = 2 end
+      if choice == "odd" and not even then hit = true; mult = 2 end
+    end
+  elseif betType == 4 then
+    if result ~= 0 then
+      if choice=="low" and result>=1 and result<=18 then hit=true; mult=2 end
+      if choice=="high" and result>=19 and result<=36 then hit=true; mult=2 end
+    end
+  end
+
+  return hit,mult,color
+end
+
+local function r_drawChooseType()
+  clearButtons()
+  drawChrome("Roulette","Waehle deine Wettart")
+  
+  mcenter(4,"Was moechtest du wetten?",COLOR_GOLD)
+  
+  local mid = math.floor(mw/2)
+  addButton("r_type_number", 4,6,mid-1,9,"ZAHL\n(36x)",COLOR_GOLD,COLOR_PANEL)
+  addButton("r_type_color",  mid+1,6,mw-3,9,"FARBE\n(2x)",colors.white,colors.red)
+  addButton("r_type_evenodd",4,11,mid-1,14,"GERADE/UNG.\n(2x)",colors.white,colors.blue)
+  addButton("r_type_lowhigh",mid+1,11,mw-3,14,"LOW/HIGH\n(2x)",colors.white,colors.green)
+  addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Menue",colors.white,COLOR_WARNING)
+end
+
+local function r_drawChooseNumber(cur)
+  clearButtons()
+  drawChrome("Roulette - Zahl","Waehle 0-36")
+  cur = cur or 0
+  
+  drawBox(5,4,mw-4,8,COLOR_PANEL_DARK)
+  mcenter(5,"Aktuell:",colors.white,COLOR_PANEL_DARK)
+  mcenter(7,tostring(cur),COLOR_GOLD,COLOR_PANEL_DARK)
+
+  local seg = math.floor((mw-8)/4)
+  if seg < 4 then seg = 4 end
+  local x=4
+  local y = 10
+  addButton("r_num_-10",x,y,x+seg-1,y+2,"-10",colors.white,COLOR_PANEL); x=x+seg+1
+  addButton("r_num_-1", x,y,x+seg-1,y+2,"-1",colors.white,COLOR_PANEL);  x=x+seg+1
+  addButton("r_num_+1", x,y,x+seg-1,y+2,"+1",colors.white,COLOR_PANEL);  x=x+seg+1
+  addButton("r_num_+10",x,y,x+seg-1,y+2,"+10",colors.white,COLOR_PANEL)
+
+  addButton("r_num_ok",4,mh-5,mw-3,mh-3,">> Weiter",colors.black,COLOR_HIGHLIGHT)
+  addButton("back_r_type",3,mh-2,mw-2,mh-1,"<< Zurueck",colors.white,COLOR_WARNING)
+  r_choice = cur
+end
+
+local function r_drawChooseColor()
+  clearButtons()
+  drawChrome("Roulette - Farbe","Rot oder Schwarz?")
+  
+  mcenter(4,"Waehle eine Farbe:",COLOR_GOLD)
+  
+  addButton("r_color_red", 4,6,math.floor(mw/2)-1,11,"ROT",colors.white,colors.red)
+  addButton("r_color_black",math.floor(mw/2)+1,6,mw-3,11,"SCHWARZ",colors.white,COLOR_PANEL_DARK)
+  addButton("back_r_type",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+end
+
+local function r_drawChooseEvenOdd()
+  clearButtons()
+  drawChrome("Roulette - Paritaet","Gerade oder Ungerade?")
+  
+  mcenter(4,"Wird die Zahl gerade oder ungerade?",COLOR_GOLD)
+  
+  addButton("r_even",4,6,math.floor(mw/2)-1,11,"GERADE",colors.white,colors.blue)
+  addButton("r_odd", math.floor(mw/2)+1,6,mw-3,11,"UNGERADE",colors.white,colors.purple)
+  addButton("back_r_type",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+end
+
+local function r_drawChooseLowHigh()
+  clearButtons()
+  drawChrome("Roulette - Bereich","Low oder High?")
+  
+  mcenter(4,"In welchem Bereich liegt die Zahl?",COLOR_GOLD)
+  
+  addButton("r_low", 4,6,math.floor(mw/2)-1,11,"LOW\n(1-18)",colors.white,colors.brown)
+  addButton("r_high",math.floor(mw/2)+1,6,mw-3,11,"HIGH\n(19-36)",colors.white,colors.green)
+  addButton("back_r_type",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+end
+
+local function r_drawChooseStake()
+  clearButtons()
+  drawChrome("Roulette - Einsatz","Wie viel setzen?")
+
+  local playerDia = getPlayerBalance()
+
+  drawBox(5,4,mw-4,7,COLOR_PANEL_DARK)
+  mcenter(5,"Dein Guthaben:",COLOR_INFO,COLOR_PANEL_DARK)
+  mcenter(6,playerDia.." Diamanten",COLOR_SUCCESS,COLOR_PANEL_DARK)
+
+  if playerDia <= 0 then
+    mcenter(10,"Keine Diamanten in Chest!",COLOR_WARNING)
+    addButton("back_r_type",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+    return
+  end
+
+  local maxStake = playerDia
+  mcenter(9,"Waehle deinen Einsatz:",colors.white)
+
+  local quarter = math.max(1,math.floor(maxStake/4))
+  local bw = math.floor((mw-10)/4)
+  if bw<4 then bw=4 end
+  local x=4
+  local y=11
+  addButton("r_stake_"..quarter,     x,y,x+bw,y+2,tostring(quarter),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("r_stake_"..(quarter*2), x,y,x+bw,y+2,tostring(quarter*2),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("r_stake_"..(quarter*3), x,y,x+bw,y+2,tostring(quarter*3),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("r_stake_"..maxStake,    x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  addButton("back_r_type",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+end
+
+local function r_drawResult()
+  clearButtons()
+  drawChrome("Roulette - Ergebnis","")
+
+  local cStr = (r_lastColor=="red" and "ROT")
+           or (r_lastColor=="black" and "SCHWARZ")
+           or "GRUEN"
+
+  local x1,x2,y1,y2 = 5,mw-4,4,9
+  local bg = (r_lastColor=="red" and colors.red)
+          or (r_lastColor=="black" and COLOR_PANEL_DARK)
+          or colors.green
+  drawBox(x1,y1,x2,y2,bg)
+  drawBorder(x1,y1,x2,y2,colors.white)
+  mcenter(5,"Zahl",colors.white,bg)
+  mcenter(7,tostring(r_lastResult),COLOR_GOLD,bg)
+  mcenter(8,"("..cStr..")",colors.white,bg)
+
+  local playerDia = getPlayerBalance()
+  mcenter(11,"Guthaben: "..playerDia.." Diamanten",colors.white)
+
+  if r_lastHit then
+    drawBox(4,13,mw-3,16,COLOR_SUCCESS)
+    mcenter(14,"*** GEWONNEN! ***",colors.white,COLOR_SUCCESS)
+    mcenter(15,"+"..r_lastPayout.." Dia (x"..r_lastMult..")",colors.white,COLOR_SUCCESS)
+  else
+    drawBox(4,13,mw-3,16,COLOR_WARNING)
+    mcenter(14,"Verloren",colors.white,COLOR_WARNING)
+    mcenter(15,"-"..r_stake.." Diamanten",colors.white,COLOR_WARNING)
+  end
+
+  addButton("r_again",4,mh-5,math.floor(mw/2)-1,mh-3,"Nochmal",colors.black,COLOR_HIGHLIGHT)
+  addButton("back_menu",math.floor(mw/2)+1,mh-5,mw-3,mh-3,"Menue",colors.white,COLOR_PANEL)
+end
+
+local function r_doSpin()
+  local playerDia = getPlayerBalance()
+  if playerDia < r_stake then
+    mode="menu"; drawMainMenu(); return
+  end
+
+  local taken = takeStake(r_stake)
+  if taken < r_stake then
+    mode="menu"; drawMainMenu(); return
+  end
+
+  clearButtons()
+  drawChrome("Roulette","Die Kugel rollt...")
+  
+  drawBox(5,5,mw-4,10,COLOR_PANEL_DARK)
+  
+  for i=1,12 do
+    local tmp = math.random(0,36)
+    local col = getColor(tmp)
+    local cStr = (col=="red" and "ROT") or (col=="black" and "SCHWARZ") or "GRUEN"
+    mcenter(7,tostring(tmp),COLOR_GOLD,COLOR_PANEL_DARK)
+    mcenter(8,"("..cStr..")",colors.white,COLOR_PANEL_DARK)
+    sleep(0.08 + i*0.01)
+  end
+
+  local result = spinWheel()
+  local hit,mult,color = resolveRoulette(r_betType,r_choice,result)
+
+  r_lastResult = result
+  r_lastColor  = color
+  r_lastHit    = hit
+  r_lastMult   = mult
+
+  if hit and mult>0 then
+    local paid = payPayout(r_stake * mult)
+    r_lastPayout = paid
+    if checkPayoutLock() then return end
+  else
+    r_lastPayout = 0
+  end
+
+  sleep(0.5)
+  r_state="result"
+  r_drawResult()
+end
+
+local function handleRouletteButton(id)
+  if r_state=="type" then
+    if id=="r_type_number" then
+      r_betType=1; r_choice=0; r_state="number"; r_drawChooseNumber(r_choice)
+    elseif id=="r_type_color" then
+      r_betType=2; r_state="color"; r_drawChooseColor()
+    elseif id=="r_type_evenodd" then
+      r_betType=3; r_state="evenodd"; r_drawChooseEvenOdd()
+    elseif id=="r_type_lowhigh" then
+      r_betType=4; r_state="lowhigh"; r_drawChooseLowHigh()
+    elseif id=="back_menu" then mode="menu"; drawMainMenu() end
+
+  elseif r_state=="number" then
+    local cur = r_choice or 0
+    if id=="r_num_-10" then cur=cur-10
+    elseif id=="r_num_-1" then cur=cur-1
+    elseif id=="r_num_+1" then cur=cur+1
+    elseif id=="r_num_+10" then cur=cur+10
+    elseif id=="r_num_ok" then
+      if cur<0 then cur=0 end
+      if cur>36 then cur=36 end
+      r_choice=cur; r_state="stake"; r_drawChooseStake(); return
+    elseif id=="back_r_type" then
+      r_state="type"; r_drawChooseType(); return
+    end
+    if cur<0 then cur=0 end
+    if cur>36 then cur=36 end
+    r_choice=cur; r_drawChooseNumber(cur)
+
+  elseif r_state=="color" then
+    if id=="r_color_red" then r_choice="red";  r_state="stake"; r_drawChooseStake()
+    elseif id=="r_color_black" then r_choice="black"; r_state="stake"; r_drawChooseStake()
+    elseif id=="back_r_type" then r_state="type"; r_drawChooseType() end
+
+  elseif r_state=="evenodd" then
+    if id=="r_even" then r_choice="even"; r_state="stake"; r_drawChooseStake()
+    elseif id=="r_odd" then r_choice="odd"; r_state="stake"; r_drawChooseStake()
+    elseif id=="back_r_type" then r_state="type"; r_drawChooseType() end
+
+  elseif r_state=="lowhigh" then
+    if id=="r_low" then r_choice="low"; r_state="stake"; r_drawChooseStake()
+    elseif id=="r_high" then r_choice="high"; r_state="stake"; r_drawChooseStake()
+    elseif id=="back_r_type" then r_state="type"; r_drawChooseType() end
+
+  elseif r_state=="stake" then
+    if id=="back_r_type" then r_state="type"; r_drawChooseType()
+    elseif id:match("^r_stake_") then
+      local v = tonumber(id:match("^r_stake_(%d+)$"))
+      if v and v>0 then r_stake=v; r_doSpin() end
+    end
+
+  elseif r_state=="result" then
+    if id=="r_again" then r_state="type"; r_drawChooseType()
+    elseif id=="back_menu" then mode="menu"; drawMainMenu() end
+  end
+end
+
+------------- COINFLIP -----------------
+
+local function c_drawStake()
+  clearButtons()
+  drawChrome("Muenzwurf","Setze deinen Einsatz")
+  
+  local playerDia = getPlayerBalance()
+  
+  drawBox(5,4,mw-4,7,COLOR_PANEL_DARK)
+  mcenter(5,"Dein Guthaben:",COLOR_INFO,COLOR_PANEL_DARK)
+  mcenter(6,playerDia.." Diamanten",COLOR_SUCCESS,COLOR_PANEL_DARK)
+
+  if playerDia < 2 then
+    mcenter(10,"Nicht genug Diamanten in Chest!",COLOR_WARNING)
+    addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+    return
+  end
+
+  mcenter(9,"Gewinnchance: 50% | Gewinn: 2x Einsatz",COLOR_GOLD)
+
+  local maxStake = playerDia
+  local q = math.max(1,math.floor(maxStake/4))
+  local bw = math.floor((mw-10)/4)
+  if bw<4 then bw=4 end
+  local x=4
+  local y=11
+  addButton("c_stake_"..q,      x,y,x+bw,y+2,tostring(q),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("c_stake_"..(q*2),  x,y,x+bw,y+2,tostring(q*2),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("c_stake_"..(q*3),  x,y,x+bw,y+2,tostring(q*3),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("c_stake_"..maxStake,x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+end
+
+local function c_drawSide()
+  clearButtons()
+  drawChrome("Muenzwurf","Kopf oder Zahl?")
+  
+  mcenter(4,"Die Muenze wird geworfen...",COLOR_GOLD)
+  mcenter(5,"Einsatz: "..c_stake.." Diamanten",colors.white)
+  
+  addButton("c_heads",4,7,math.floor(mw/2)-1,12,"KOPF",colors.black,colors.orange)
+  addButton("c_tails",math.floor(mw/2)+1,7,mw-3,12,"ZAHL",colors.white,colors.brown)
+  addButton("back_c_stake",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+end
+
+local function c_drawResult()
+  clearButtons()
+  drawChrome("Muenzwurf - Ergebnis","")
+
+  local resStr = (c_lastSide=="heads" and "KOPF") or "ZAHL"
+  local resBg = (c_lastSide=="heads" and colors.orange) or colors.brown
+  
+  drawBox(5,4,mw-4,9,resBg)
+  drawBorder(5,4,mw-4,9,colors.white)
+  mcenter(5,"Die Muenze zeigt:",colors.white,resBg)
+  mcenter(7,resStr,COLOR_GOLD,resBg)
+
+  local playerDia = getPlayerBalance()
+  mcenter(11,"Guthaben: "..playerDia.." Diamanten",colors.lightGray)
+
+  if c_lastWin then
+    drawBox(4,13,mw-3,16,COLOR_SUCCESS)
+    mcenter(14,"*** GEWONNEN! ***",colors.white,COLOR_SUCCESS)
+    mcenter(15,"+"..c_lastPayout.." Diamanten",colors.white,COLOR_SUCCESS)
+  else
+    drawBox(4,13,mw-3,16,COLOR_WARNING)
+    mcenter(14,"Leider verloren",colors.white,COLOR_WARNING)
+    mcenter(15,"-"..c_stake.." Diamanten",colors.white,COLOR_WARNING)
+  end
+
+  addButton("c_again",4,mh-5,math.floor(mw/2)-1,mh-3,"Nochmal",colors.black,COLOR_HIGHLIGHT)
+  addButton("back_menu",math.floor(mw/2)+1,mh-5,mw-3,mh-3,"Zum Menue",colors.white,COLOR_PANEL)
+end
+
+local function c_doFlip()
+  local playerDia = getPlayerBalance()
+  if playerDia < c_stake then 
+    mode="menu"; drawMainMenu(); return 
+  end
+  
+  local taken = takeStake(c_stake)
+  if taken < c_stake then 
+    mode="menu"; drawMainMenu(); return 
+  end
+
+  clearButtons()
+  drawChrome("Muenze fliegt...","Bitte warten")
+  
+  drawBox(5,6,mw-4,10,COLOR_PANEL_DARK)
+  
+  for i=1,10 do
+    local show = (i%2==0) and "KOPF" or "ZAHL"
+    mcenter(8,show,COLOR_GOLD,COLOR_PANEL_DARK)
+    sleep(0.08 + i*0.008)
+  end
+
+  local flip = math.random(0,1)
+  c_lastSide = (flip==0) and "heads" or "tails"
+
+  if c_lastSide == c_choice then
+    local paid = payPayout(c_stake * 2)
+    c_lastWin = true
+    c_lastPayout = paid
+    if checkPayoutLock() then return end
+  else
+    c_lastWin = false
+    c_lastPayout = 0
+  end
+
+  sleep(0.5)
+  c_state="result"
+  c_drawResult()
+end
+
+local function handleCoinButton(id)
+  if c_state=="stake" then
+    if id:match("^c_stake_") then
+      local v = tonumber(id:match("^c_stake_(%d+)$"))
+      if v and v>0 then c_stake=v; c_state="side"; c_drawSide() end
+    elseif id=="back_menu" then mode="menu"; drawMainMenu() end
+
+  elseif c_state=="side" then
+    if id=="c_heads" then c_choice="heads"; c_doFlip()
+    elseif id=="c_tails" then c_choice="tails"; c_doFlip()
+    elseif id=="back_c_stake" then c_state="stake"; c_drawStake() end
+
+  elseif c_state=="result" then
+    if id=="c_again" then c_state="stake"; c_drawStake()
+    elseif id=="back_menu" then mode="menu"; drawMainMenu() end
+  end
+end
+
+------------- HIGH / LOW ---------------
+
+local function h_drawStake()
+  clearButtons()
+  drawChrome("High/Low","Setze deinen Einsatz")
+  
+  local playerDia = getPlayerBalance()
+  
+  drawBox(5,4,mw-4,7,COLOR_PANEL_DARK)
+  mcenter(5,"Dein Guthaben:",COLOR_INFO,COLOR_PANEL_DARK)
+  mcenter(6,playerDia.." Diamanten",COLOR_SUCCESS,COLOR_PANEL_DARK)
+
+  if playerDia < 2 then
+    mcenter(10,"Nicht genug Diamanten in Chest!",COLOR_WARNING)
+    addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+    return
+  end
+
+  mcenter(9,"Rate ob die naechste Zahl hoeher oder tiefer ist!",COLOR_GOLD)
+  mcenter(10,"Push bei Gleichstand - Einsatz zurueck",colors.lightGray)
+
+  local maxStake = playerDia
+  local q = math.max(1,math.floor(maxStake/4))
+  local bw = math.floor((mw-10)/4)
+  if bw<4 then bw=4 end
+  local x=4
+  local y=12
+  addButton("h_stake_"..q,     x,y,x+bw,y+2,tostring(q),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("h_stake_"..(q*2), x,y,x+bw,y+2,tostring(q*2),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("h_stake_"..(q*3), x,y,x+bw,y+2,tostring(q*3),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("h_stake_"..maxStake,x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+end
+
+local function h_drawGuess()
+  clearButtons()
+  drawChrome("High/Low","Tipp abgeben")
+  
+  drawBox(5,4,mw-4,9,COLOR_PANEL_DARK)
+  drawBorder(5,4,mw-4,9,COLOR_GOLD)
+  mcenter(5,"Aktuelle Zahl:",colors.white,COLOR_PANEL_DARK)
+  mcenter(7,tostring(h_startNum),COLOR_GOLD,COLOR_PANEL_DARK)
+  mcenter(8,"(von 1-9)",colors.lightGray,COLOR_PANEL_DARK)
+  
+  mcenter(11,"Ist die naechste Zahl hoeher oder tiefer?",colors.white)
+  
+  addButton("h_higher",4,13,math.floor(mw/2)-1,16,"HOEHER",colors.black,colors.green)
+  addButton("h_lower", math.floor(mw/2)+1,13,mw-3,16,"TIEFER",colors.white,COLOR_WARNING)
+  addButton("back_h_stake",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+end
+
+local function h_drawResult()
+  clearButtons()
+  drawChrome("High/Low - Ergebnis","")
+  
+  drawBox(5,4,mw-4,8,COLOR_PANEL_DARK)
+  mcenter(5,"Start: "..tostring(h_startNum).."  =>  Neu: "..tostring(h_nextNum),COLOR_GOLD,COLOR_PANEL_DARK)
+  
+  local diff = h_nextNum - h_startNum
+  local arrow = ""
+  if diff > 0 then arrow = "^^^ HOEHER ^^^"
+  elseif diff < 0 then arrow = "vvv TIEFER vvv"
+  else arrow = "=== GLEICH ===" end
+  mcenter(7,arrow,colors.white,COLOR_PANEL_DARK)
+
+  local playerDia = getPlayerBalance()
+  mcenter(10,"Guthaben: "..playerDia.." Diamanten",colors.lightGray)
+
+  if h_lastWin then
+    drawBox(4,12,mw-3,15,COLOR_SUCCESS)
+    mcenter(13,"*** GEWONNEN! ***",colors.white,COLOR_SUCCESS)
+    mcenter(14,"+"..h_lastPayout.." Diamanten",colors.white,COLOR_SUCCESS)
+  elseif h_lastPush then
+    drawBox(4,12,mw-3,15,colors.cyan)
+    mcenter(13,"GLEICHSTAND (Push)",colors.white,colors.cyan)
+    mcenter(14,"Einsatz zurueck: "..h_lastPayout.." Diamanten",colors.white,colors.cyan)
+  else
+    drawBox(4,12,mw-3,15,COLOR_WARNING)
+    mcenter(13,"Leider verloren",colors.white,COLOR_WARNING)
+    mcenter(14,"-"..h_stake.." Diamanten",colors.white,COLOR_WARNING)
+  end
+
+  addButton("h_again",4,mh-5,math.floor(mw/2)-1,mh-3,"Nochmal",colors.black,COLOR_HIGHLIGHT)
+  addButton("back_menu",math.floor(mw/2)+1,mh-5,mw-3,mh-3,"Zum Menue",colors.white,COLOR_PANEL)
+end
+
+local function h_doRound()
+  local playerDia = getPlayerBalance()
+  if playerDia < h_stake then 
+    mode="menu"; drawMainMenu(); return 
+  end
+  
+  local taken = takeStake(h_stake)
+  if taken < h_stake then 
+    mode="menu"; drawMainMenu(); return 
+  end
+
+  -- Startzahl NICHT neu ziehen, nur die neue Zahl:
+  h_nextNum  = math.random(1,9)
+
+  local win  = false
+  local push = false
+
+  if h_nextNum>h_startNum and h_choice=="higher" then win=true end
+  if h_nextNum<h_startNum and h_choice=="lower" then win=true end
+  if h_nextNum==h_startNum then push=true end
+
+  if win then
+    local paid = payPayout(h_stake * 2)
+    h_lastWin=true; h_lastPayout=paid; h_lastPush=false
+    if checkPayoutLock() then return end
+  elseif push then
+    local paid = payPayout(h_stake)
+    h_lastWin=false; h_lastPayout=paid; h_lastPush=true
+    if checkPayoutLock() then return end
+  else
+    h_lastWin=false; h_lastPayout=0; h_lastPush=false
+  end
+
+  h_state="result"
+  h_drawResult()
+end
+
+local function handleHiloButton(id)
+  if h_state=="stake" then
+    if id:match("^h_stake_") then
+      local v = tonumber(id:match("^h_stake_(%d+)$"))
+      if v and v>0 then
+        h_stake=v
+        h_startNum = math.random(1,9)
+        h_state="guess"; h_drawGuess()
+      end
+    elseif id=="back_menu" then mode="menu"; drawMainMenu() end
+
+  elseif h_state=="guess" then
+    if id=="h_higher" then h_choice="higher"; h_doRound()
+    elseif id=="h_lower" then h_choice="lower"; h_doRound()
+    elseif id=="back_h_stake" then h_state="stake"; h_drawStake() end
+
+  elseif h_state=="result" then
+    if id=="h_again" then h_state="stake"; h_drawStake()
+    elseif id=="back_menu" then mode="menu"; drawMainMenu() end
+  end
+end
+
+------------- BLACKJACK ----------------
+
+local cardSuits = {"S","H","D","C"}
+
+local function bj_createDeck()
+  local deck = {}
+  local ranks = {"A","2","3","4","5","6","7","8","9","10","J","Q","K"}
+  for _,suit in ipairs(cardSuits) do
+    for _,rank in ipairs(ranks) do
+      table.insert(deck, {rank=rank, suit=suit})
+    end
+  end
+  return deck
+end
+
+local function bj_shuffleDeck(deck)
+  for i = #deck, 2, -1 do
+    local j = math.random(i)
+    deck[i], deck[j] = deck[j], deck[i]
+  end
+end
+
+local function bj_drawCard(deck)
+  return table.remove(deck)
+end
+
+local function bj_getCardValue(card)
+  if card.rank == "A" then return 11
+  elseif card.rank == "K" or card.rank == "Q" or card.rank == "J" then return 10
+  else return tonumber(card.rank) end
+end
+
+local function bj_calculateHandValue(hand)
+  local value = 0
+  local aces = 0
+  
+  for _,card in ipairs(hand) do
+    local cardVal = bj_getCardValue(card)
+    value = value + cardVal
+    if card.rank == "A" then aces = aces + 1 end
+  end
+  
+  while value > 21 and aces > 0 do
+    value = value - 10
+    aces = aces - 1
+  end
+  
+  return value
+end
+
+local function bj_isBlackjack(hand)
+  return #hand == 2 and bj_calculateHandValue(hand) == 21
+end
+
+local function bj_cardToString(card, hidden)
+  if hidden then return "[??]" end
+  local suitChar = card.suit
+  return "["..card.rank..suitChar.."]"
+end
+
+local function bj_handToString(hand, hideFirst)
+  local str = ""
+  for i,card in ipairs(hand) do
+    if i > 1 then str = str.." " end
+    str = str .. bj_cardToString(card, hideFirst and i==1)
+  end
+  return str
+end
+
+local function bj_drawStake()
+  clearButtons()
+  drawChrome("Blackjack","Setze deinen Einsatz")
+  
+  local playerDia = getPlayerBalance()
+  
+  drawBox(5,4,mw-4,7,COLOR_PANEL_DARK)
+  mcenter(5,"Dein Guthaben:",COLOR_INFO,COLOR_PANEL_DARK)
+  mcenter(6,playerDia.." Diamanten",COLOR_SUCCESS,COLOR_PANEL_DARK)
+
+  if playerDia < 2 then
+    mcenter(10,"Nicht genug Diamanten in Chest!",COLOR_WARNING)
+    addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+    return
+  end
+
+  mcenter(9,"Blackjack zahlt 3:2 | Gewinn: 1:1 | Push bei Gleichstand",COLOR_GOLD)
+
+  local maxStake = playerDia
+  local q = math.max(1,math.floor(maxStake/4))
+  local bw = math.floor((mw-10)/4)
+  if bw<4 then bw=4 end
+  local x=4
+  local y=11
+  addButton("bj_stake_"..q,     x,y,x+bw,y+2,tostring(q),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("bj_stake_"..(q*2), x,y,x+bw,y+2,tostring(q*2),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("bj_stake_"..(q*3), x,y,x+bw,y+2,tostring(q*3),colors.white,COLOR_PANEL); x=x+bw+1
+  addButton("bj_stake_"..maxStake,x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+end
+
+local function bj_drawGame()
+  clearButtons()
+  drawChrome("Blackjack","Ziel: 21 Punkte")
+  
+  local dealerVal = bj_calculateHandValue(bj_dealerHand)
+  local playerVal = bj_calculateHandValue(bj_playerHand)
+  
+  drawBox(4,4,mw-3,8,COLOR_PANEL_DARK)
+  mcenter(5,"DEALER",colors.red,COLOR_PANEL_DARK)
+  if bj_state == "playing" then
+    mcenter(6,bj_cardToString(bj_dealerHand[1],true).." "..bj_cardToString(bj_dealerHand[2],false),colors.white,COLOR_PANEL_DARK)
+    mcenter(7,"Wert: ??",colors.lightGray,COLOR_PANEL_DARK)
+  else
+    mcenter(6,bj_handToString(bj_dealerHand, false),colors.white,COLOR_PANEL_DARK)
+    mcenter(7,"Wert: "..dealerVal,dealerVal>21 and COLOR_WARNING or COLOR_GOLD,COLOR_PANEL_DARK)
+  end
+  
+  drawBox(4,10,mw-3,14,COLOR_PANEL_DARK)
+  mcenter(11,"SPIELER (Du)",COLOR_SUCCESS,COLOR_PANEL_DARK)
+  mcenter(12,bj_handToString(bj_playerHand, false),colors.white,COLOR_PANEL_DARK)
+  mcenter(13,"Wert: "..playerVal,playerVal>21 and COLOR_WARNING or COLOR_GOLD,COLOR_PANEL_DARK)
+  
+  mcenter(16,"Einsatz: "..bj_stake.." Diamanten",colors.lightGray)
+  
+  if bj_state == "playing" then
+    if playerVal < 21 then
+      addButton("bj_hit", 4,mh-7,math.floor(mw/2)-1,mh-5,"HIT (Karte)",colors.black,COLOR_HIGHLIGHT)
+      addButton("bj_stand",math.floor(mw/2)+1,mh-7,mw-3,mh-5,"STAND",colors.white,COLOR_WARNING)
+    else
+      mcenter(18,"Automatisch STAND",colors.cyan)
+      sleep(1)
+      bj_state = "dealer"
+      bj_drawGame()
+      return
+    end
+  end
+  
+  addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Abbrechen",colors.white,COLOR_WARNING)
+end
+
+local function bj_drawResult()
+  clearButtons()
+  drawChrome("Blackjack - Ergebnis","")
+  
+  local dealerVal = bj_calculateHandValue(bj_dealerHand)
+  local playerVal = bj_calculateHandValue(bj_playerHand)
+  
+  drawBox(4,4,mw-3,7,COLOR_PANEL_DARK)
+  mcenter(5,"Dealer: "..bj_handToString(bj_dealerHand, false),colors.white,COLOR_PANEL_DARK)
+  mcenter(6,"Wert: "..dealerVal,dealerVal>21 and COLOR_WARNING or colors.white,COLOR_PANEL_DARK)
+  
+  drawBox(4,9,mw-3,12,COLOR_PANEL_DARK)
+  mcenter(10,"Spieler: "..bj_handToString(bj_playerHand, false),colors.white,COLOR_PANEL_DARK)
+  mcenter(11,"Wert: "..playerVal,playerVal>21 and COLOR_WARNING or colors.white,COLOR_PANEL_DARK)
+  
+  local playerDia = getPlayerBalance()
+  mcenter(14,"Guthaben: "..playerDia.." Diamanten",colors.lightGray)
+  
+  if bj_lastResult == "blackjack" then
+    drawBox(4,16,mw-3,19,colors.purple)
+    mcenter(17,"*** BLACKJACK! ***",COLOR_GOLD,colors.purple)
+    mcenter(18,"+"..bj_lastPayout.." Diamanten (3:2)",colors.white,colors.purple)
+  elseif bj_lastWin then
+    drawBox(4,16,mw-3,19,COLOR_SUCCESS)
+    mcenter(17,"*** GEWONNEN! ***",colors.white,COLOR_SUCCESS)
+    mcenter(18,"+"..bj_lastPayout.." Diamanten",colors.white,COLOR_SUCCESS)
+  elseif bj_lastResult == "push" then
+    drawBox(4,16,mw-3,19,colors.cyan)
+    mcenter(17,"GLEICHSTAND (Push)",colors.white,colors.cyan)
+    mcenter(18,"Einsatz zurueck: "..bj_lastPayout,colors.white,colors.cyan)
+  else
+    drawBox(4,16,mw-3,19,COLOR_WARNING)
+    mcenter(17,"Verloren",colors.white,COLOR_WARNING)
+    mcenter(18,"-"..bj_stake.." Diamanten",colors.white,COLOR_WARNING)
+  end
+  
+  addButton("bj_again",4,mh-5,math.floor(mw/2)-1,mh-3,"Nochmal",colors.black,COLOR_HIGHLIGHT)
+  addButton("back_menu",math.floor(mw/2)+1,mh-5,mw-3,mh-3,"Zum Menue",colors.white,COLOR_PANEL)
+end
+
+local function bj_dealerPlay()
+  bj_state = "dealer"
+  clearButtons()
+  drawChrome("Blackjack","Dealer zieht...")
+  
+  while bj_calculateHandValue(bj_dealerHand) < 17 do
+    sleep(0.8)
+    local card = bj_drawCard(bj_deck)
+    table.insert(bj_dealerHand, card)
+    
+    drawBox(5,6,mw-4,10,COLOR_PANEL_DARK)
+    mcenter(7,"Dealer zieht: "..bj_cardToString(card, false),COLOR_GOLD,COLOR_PANEL_DARK)
+    mcenter(8,"Dealer Hand: "..bj_handToString(bj_dealerHand, false),colors.white,COLOR_PANEL_DARK)
+    mcenter(9,"Wert: "..bj_calculateHandValue(bj_dealerHand),colors.white,COLOR_PANEL_DARK)
+  end
+  
+  sleep(1)
+  
+  local playerVal = bj_calculateHandValue(bj_playerHand)
+  local dealerVal = bj_calculateHandValue(bj_dealerHand)
+  
+  bj_lastWin = false
+  bj_lastPayout = 0
+  bj_lastResult = "lose"
+  
+  if playerVal > 21 then
+    bj_lastResult = "lose"
+  elseif bj_isBlackjack(bj_playerHand) and not bj_isBlackjack(bj_dealerHand) then
+    local paid = payPayout(math.floor(bj_stake * 2.5))
+    bj_lastWin = true
+    bj_lastPayout = paid
+    bj_lastResult = "blackjack"
+    if checkPayoutLock() then return end
+  elseif dealerVal > 21 then
+    local paid = payPayout(bj_stake * 2)
+    bj_lastWin = true
+    bj_lastPayout = paid
+    bj_lastResult = "win"
+    if checkPayoutLock() then return end
+  elseif playerVal > dealerVal then
+    local paid = payPayout(bj_stake * 2)
+    bj_lastWin = true
+    bj_lastPayout = paid
+    bj_lastResult = "win"
+    if checkPayoutLock() then return end
+  elseif playerVal == dealerVal then
+    local paid = payPayout(bj_stake)
+    bj_lastPayout = paid
+    bj_lastResult = "push"
+    if checkPayoutLock() then return end
+  else
+    bj_lastResult = "lose"
+  end
+  
+  bj_state = "result"
+  bj_drawResult()
+end
+
+local function bj_startGame()
+  local playerDia = getPlayerBalance()
+  if playerDia < bj_stake then
+    mode="menu"; drawMainMenu(); return
+  end
+  
+  local taken = takeStake(bj_stake)
+  if taken < bj_stake then
+    mode="menu"; drawMainMenu(); return
+  end
+  
+  bj_deck = bj_createDeck()
+  bj_shuffleDeck(bj_deck)
+  
+  bj_playerHand = {}
+  bj_dealerHand = {}
+  
+  table.insert(bj_playerHand, bj_drawCard(bj_deck))
+  table.insert(bj_dealerHand, bj_drawCard(bj_deck))
+  table.insert(bj_playerHand, bj_drawCard(bj_deck))
+  table.insert(bj_dealerHand, bj_drawCard(bj_deck))
+  
+  if bj_isBlackjack(bj_playerHand) then
+    bj_dealerPlay()
+  else
+    bj_state = "playing"
+    bj_drawGame()
+  end
+end
+
+local function handleBlackjackButton(id)
+  if bj_state == "stake" then
+    if id:match("^bj_stake_") then
+      local v = tonumber(id:match("^bj_stake_(%d+)$"))
+      if v and v>0 then
+        bj_stake = v
+        bj_startGame()
+      end
+    elseif id=="back_menu" then
+      mode="menu"; drawMainMenu()
+    end
+    
+  elseif bj_state == "playing" then
+    if id=="bj_hit" then
+      local card = bj_drawCard(bj_deck)
+      table.insert(bj_playerHand, card)
+      local playerVal = bj_calculateHandValue(bj_playerHand)
+      
+      if playerVal >= 21 then
+        sleep(0.5)
+        bj_dealerPlay()
+      else
+        bj_drawGame()
+      end
+      
+    elseif id=="bj_stand" then
+      bj_dealerPlay()
+      
+    elseif id=="back_menu" then
+      local paid = payPayout(bj_stake)
+      if checkPayoutLock() then return end
+      mode="menu"; drawMainMenu()
+    end
+    
+  elseif bj_state == "result" then
+    if id=="bj_again" then
+      bj_state = "stake"
+      bj_drawStake()
+    elseif id=="back_menu" then
+      mode="menu"; drawMainMenu()
+    end
+  end
+end
+
+----------------- SLOTS (3x3) ----------------
+
+local function getWeightedSymbol()
+  local totalWeight = 0
+  for _,s in ipairs(slotSymbols) do
+    totalWeight = totalWeight + s.weight
+  end
+  
+  local rand = math.random(1, totalWeight)
+  local current = 0
+  
+  for _,s in ipairs(slotSymbols) do
+    current = current + s.weight
+    if rand <= current then
+      return s.sym
+    end
+  end
+  
+  return slotSymbols[1].sym
+end
+
+local function s_spinGrid()
+  local grid = {{},{},{}}
+  for row=1,3 do
+    for col=1,3 do
+      grid[row][col] = getWeightedSymbol()
+    end
+  end
+  return grid
+end
+
+local function s_checkLine(grid, line)
+  local symbols = {}
+  for _,pos in ipairs(line.path) do
+    local row, col = pos[1], pos[2]
+    table.insert(symbols, grid[row][col])
+  end
+  
+  local first = symbols[1]
+  local allSame = true
+  for _,sym in ipairs(symbols) do
+    if sym ~= first then allSame = false; break end
+  end
+  
+  if allSame then
+    if first == "7"   then return 50, first, line.name end
+    if first == "BAR" then return 25, first, line.name end
+    if first == "DIA" then return 15, first, line.name end
+    if first == "$"   then return 8,  first, line.name end
+    if first == "CHR" then return 5,  first, line.name end
+    if first == "STR" then return 4,  first, line.name end
+    if first == "BEL" then return 3,  first, line.name end
+    if first == "FS"  then return 2,  first, line.name end
+  end
+  
+  return 0, nil, nil
+end
+
+local function s_countScatters(grid)
+  local count = 0
+  for row=1,3 do
+    for col=1,3 do
+      if grid[row][col] == "FS" then count = count + 1 end
+    end
+  end
+  return count
+end
+
+local function s_evaluateGrid(grid)
+  local totalMult = 0
+  local winningLines = {}
+  
+  for _,line in ipairs(winLines) do
+    local mult, sym, lineName = s_checkLine(grid, line)
+    if mult > 0 then
+      totalMult = totalMult + mult
+      table.insert(winningLines, {line=lineName, mult=mult, sym=sym})
+    end
+  end
+  
+  local scatterCount = s_countScatters(grid)
+  local freeSpinsWon = 0
+  
+  if scatterCount >= 3 then
+    freeSpinsWon = 3
+  end
+  
+  return totalMult, winningLines, freeSpinsWon
+end
+
+local function s_drawScreen()
+  clearButtons()
+  
+  local title = "Slots 3x3"
+  if s_freeSpins > 0 then
+    title = title .. " - FS: "..s_freeSpins
+  end
+  drawChrome(title, "5 Linien | Scatter=Freispiele")
+
+  local playerDia = getPlayerBalance()
+
+  drawBox(4,4,mw-3,6,COLOR_PANEL_DARK)
+  mcenter(5,"Guthaben: "..playerDia.." | Bet: "..s_bet.." | Won: "..s_totalWin,COLOR_GOLD,COLOR_PANEL_DARK)
+
+  local controlY = 8
+  if s_freeSpins == 0 then
+    local mid = math.floor(mw/2)
+    addButton("s_bet_minus",4,controlY,mid-2,controlY+1," - ",colors.white,COLOR_PANEL)
+    addButton("s_bet_plus", mid+2,controlY,mw-3,controlY+1," + ",colors.white,COLOR_PANEL)
+    controlY = controlY + 2
+  else
+    drawBox(4,controlY,mw-3,controlY+1,colors.purple)
+    mcenter(controlY,"FREE SPIN MODE",colors.white,colors.purple)
+    controlY = controlY + 2
+  end
+
+  local boxSize = 7
+  if mw < 40 then boxSize = 6 end
+  if mw < 25 then boxSize = 5 end
+  
+  local gridW = boxSize * 3 + 4
+  local startX = math.floor((mw - gridW) / 2)
+  local startY = controlY + 1
+  
+  for row=1,3 do
+    for col=1,3 do
+      local x1 = startX + (col-1)*(boxSize+2)
+      local x2 = x1 + boxSize
+      local y1 = startY + (row-1)*(boxSize+1)
+      local y2 = y1 + boxSize - 1
+      
+      local sym = (s_grid[row] and s_grid[row][col]) or "?"
+      local symColor = colors.white
+      
+      if sym == "7" then symColor = colors.red
+      elseif sym == "BAR" then symColor = colors.orange
+      elseif sym == "DIA" then symColor = colors.cyan
+      elseif sym == "$" then symColor = colors.lime
+      elseif sym == "CHR" then symColor = colors.pink
+      elseif sym == "STR" then symColor = colors.yellow
+      elseif sym == "BEL" then symColor = colors.lightGray
+      elseif sym == "FS" then symColor = colors.purple end
+      
+      drawBox(x1,y1,x2,y2,COLOR_PANEL_DARK)
+      drawBorder(x1,y1,x2,y2,COLOR_GOLD)
+      
+      local label = sym
+      if #label > boxSize-1 then label = label:sub(1,boxSize-1) end
+      mwrite(x1+math.floor((boxSize-#label+1)/2), math.floor((y1+y2)/2), label, symColor, COLOR_PANEL_DARK)
+    end
+  end
+
+  monitor.setBackgroundColor(COLOR_BG)
+  
+  local infoY = startY + 3*(boxSize+1) + 1
+  
+  if s_state=="result" and #s_winLines > 0 then
+    local winText = ""
+    for i,wl in ipairs(s_winLines) do
+      winText = winText .. wl.sym.."x"..wl.mult
+      if i < #s_winLines then winText = winText .. " + " end
+    end
+    
+    if #winText > mw-8 then 
+      winText = winText:sub(1,mw-12).."..." 
+    end
+    
+    drawBox(4,infoY,mw-3,infoY+1,COLOR_SUCCESS)
+    mcenter(infoY,"WIN: "..winText,colors.white,COLOR_SUCCESS)
+    infoY = infoY + 2
+  end
+  
+  if s_state=="result" then
+    if s_lastWin then
+      if s_lastMult >= 50 then
+        mcenter(infoY,"JACKPOT x"..s_lastMult.." = "..s_lastPayout,COLOR_GOLD)
+      else
+        mcenter(infoY,"+"..s_lastPayout.." Diamonds",COLOR_HIGHLIGHT)
+      end
+    else
+      mcenter(infoY,"No win - Try again!",COLOR_WARNING)
+    end
+    infoY = infoY + 1
+  else
+    mcenter(infoY,"Press SPIN to play",colors.lightGray)
+    infoY = infoY + 1
+  end
+
+  local btnY = math.max(infoY + 1, mh-4)
+  if s_freeSpins > 0 then
+    addButton("s_spin", 4, btnY, mw-3, btnY+1, "FREE SPIN", colors.black, colors.purple)
+  else
+    addButton("s_spin", 4, btnY, math.floor(mw/2)-1, btnY+1, "SPIN", colors.black, COLOR_HIGHLIGHT)
+    addButton("back_menu", math.floor(mw/2)+1, btnY, mw-3, btnY+1, "Menu", colors.white, COLOR_PANEL)
+  end
+end
+
+local function s_doSpin()
+  local playerDia = getPlayerBalance()
+  local isFreeSpin = (s_freeSpins > 0)
+  local cost = isFreeSpin and 0 or s_bet
+  
+  if cost > 0 and playerDia < cost then
+    clearButtons()
+    drawChrome("Slots","Nicht genug Guthaben")
+    drawBox(5,6,mw-4,10,COLOR_WARNING)
+    mcenter(7,"Zu wenig Diamanten!",colors.white,COLOR_WARNING)
+    mcenter(8,"Guthaben: "..playerDia.." | Bedarf: "..cost,colors.white,COLOR_WARNING)
+    addButton("s_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
+    s_state="setup"
+    return
+  end
+
+  if cost > 0 then
+    local taken = takeStake(cost)
+    if taken < cost then
+      s_lastWin=false; s_lastPayout=0
+      s_state="setup"
+      drawMainMenu()
+      return
+    end
+    s_freeSpinBet = cost
+  end
+  
+  if isFreeSpin then
+    s_freeSpins = s_freeSpins - 1
+  end
+
+  s_state="spinning"
+  s_grid = s_spinGrid()
+  sleep(0.5)
+  
+  local mult, winningLines, freeSpinsWon = s_evaluateGrid(s_grid)
+  
+  s_lastMult = mult
+  s_winLines = winningLines
+  
+  if freeSpinsWon > 0 then
+    s_freeSpins = s_freeSpins + freeSpinsWon
+    
+    clearButtons()
+    mclearRaw()
+    drawChrome("FREE SPINS!","Du hast Freispiele gewonnen!")
+    
+    local msgY = math.floor(mh/2) - 3
+    
+    for i=1,5 do
+      drawBox(5,msgY,mw-4,msgY+6,colors.purple)
+      
+      local col1 = (i % 2 == 1) and colors.yellow or colors.white
+      local col2 = (i % 2 == 1) and colors.white or colors.yellow
+      
+      mcenter(msgY+1,"* * * * * *",col1,colors.purple)
+      mcenter(msgY+2,"FREE SPINS!",col2,colors.purple)
+      mcenter(msgY+3,"+"..freeSpinsWon.." Freispiele",col1,colors.purple)
+      mcenter(msgY+4,"Gesamt: "..s_freeSpins,col2,colors.purple)
+      mcenter(msgY+5,"* * * * * *",col1,colors.purple)
+      
+      sleep(0.3)
+    end
+    
+    sleep(1)
+  end
+
+  local payoutBet
+  if isFreeSpin then
+    payoutBet = s_freeSpinBet
+  else
+    payoutBet = cost
+  end
+
+  if mult > 0 and payoutBet > 0 then
+    local paid = payPayout(payoutBet * mult)
+    s_lastWin = true
+    s_lastPayout = paid
+    s_totalWin = s_totalWin + paid
+    
+    if checkPayoutLock() then return end
+
+    if mult >= 50 then
+      clearButtons()
+      mclearRaw()
+      drawChrome("*** JACKPOT ***","")
+      
+      local msgY = math.floor(mh/2) - 4
+      
+      for i=1,6 do
+        drawBox(4,msgY,mw-3,msgY+8,colors.red)
+        
+        local col = (i % 2 == 1) and colors.yellow or colors.white
+        
+        mcenter(msgY+1,"# # # # # #",col,colors.red)
+        mcenter(msgY+3,"J A C K P O T !",col,colors.red)
+        mcenter(msgY+5,paid.." DIAMANTEN",colors.yellow,colors.red)
+        mcenter(msgY+7,"# # # # # #",col,colors.red)
+        
+        sleep(0.35)
+      end
+      
+      sleep(2)
+    end
+  else
+    s_lastWin = false
+    s_lastPayout = 0
+  end
+
+  s_state="result"
+  s_drawScreen()
+  
+  if s_freeSpins > 0 then
+    sleep(2.5)
+    s_doSpin()
+  else
+    s_freeSpinBet = 0
+  end
+end
+
+local function handleSlotButton(id)
+  if id=="back_menu" then
+    if s_freeSpins > 0 then
+      clearButtons()
+      drawChrome("Achtung!","Freispiele aktiv!")
+      mcenter(8,"Noch "..s_freeSpins.." Freispiele!",COLOR_WARNING)
+      mcenter(10,"Wirklich beenden?",colors.white)
+      addButton("s_confirm_exit",4,12,math.floor(mw/2)-1,14,"Ja",colors.white,COLOR_WARNING)
+      addButton("s_cancel_exit",math.floor(mw/2)+1,12,mw-3,14,"Nein",colors.black,COLOR_HIGHLIGHT)
+      return
+    end
+    s_totalWin = 0
+    mode="menu"; drawMainMenu(); return
+  end
+  
+  if id=="s_confirm_exit" then
+    s_freeSpins = 0
+    s_totalWin = 0
+    s_freeSpinBet = 0
+    mode="menu"; drawMainMenu(); return
+  end
+  
+  if id=="s_cancel_exit" then
+    s_drawScreen(); return
+  end
+
+  if id=="s_back" then
+    s_state="setup"
+    s_drawScreen()
+    return
+  end
+
+  if id=="s_bet_minus" then
+    s_bet = math.max(1, s_bet - 1)
+    s_state="setup"
+    s_drawScreen()
+  elseif id=="s_bet_plus" then
+    local playerDia = getPlayerBalance()
+    s_bet = math.min(playerDia, s_bet + 1)
+    s_state="setup"
+    s_drawScreen()
+  elseif id=="s_spin" then
+    s_doSpin()
+  end
+end
+
+------------- SIMPLIFIED GAME STARTERS -------------
+
+local function drawRouletteSimple()
+  r_state="type"
+  r_betType, r_choice, r_stake = nil, nil, 0
+  r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
+  r_drawChooseType()
+end
+
+local function drawHiloSimple()
+  h_state="stake"
+  h_stake = 0
+  h_startNum, h_nextNum, h_choice = nil, nil, nil
+  h_lastWin, h_lastPayout, h_lastPush = false, 0, false
+  h_drawStake()
+end
+
+local function drawBlackjackSimple()
+  bj_state="stake"
+  bj_stake = 0
+  bj_playerHand, bj_dealerHand, bj_deck = {}, {}, {}
+  bj_lastWin, bj_lastPayout, bj_lastResult = false, 0, ""
+  bj_drawStake()
+end
+
+local function drawSlotsSimple()
+  s_state="setup"
+  s_bet = 1
+  s_grid = {{},{},{}}
+  s_lastWin, s_lastMult, s_lastPayout = false, 0, 0
+  s_freeSpins, s_totalWin, s_winLines = 0, 0, {}
+  s_freeSpinBet = 0
+  s_drawScreen()
+end
+
+------------- GLOBAL TOUCH --------------
+
+local function handleButton(id)
+    if mode=="payout" then
+        if id=="pending_check" then
+            flushPendingPayoutIfPossible()
+            if (pendingPayout or 0) <= 0 then
+                mode="menu"
+                drawMainMenu()
+            else
+                drawPendingPayoutScreen()
+            end
+        elseif id=="admin_panel" then
+            mode="admin"
+            admin_pin_input=""
+            drawAdminPinEntry()
+        end
+        return
+    end
+
+    if mode=="menu" then
+        if (pendingPayout or 0) > 0 then
+            mode="payout"
+            drawPendingPayoutScreen()
+            return
+        end
+
+        if id=="game_roulette" then mode="roulette"; drawRouletteSimple()
+        elseif id=="game_coin" then mode="coin"; c_state="stake"; c_drawStake()
+        elseif id=="game_hilo" then mode="hilo"; drawHiloSimple()
+        elseif id=="game_blackjack" then mode="blackjack"; drawBlackjackSimple()
+        elseif id=="game_slots" then mode="slots"; drawSlotsSimple()
+        elseif id=="admin_panel" then 
+            mode="admin"
+            admin_pin_input = ""
+            drawAdminPinEntry()
+        end
+    
+    elseif mode=="admin" then
+        handleAdminButton(id)
+    
+    elseif mode=="roulette" then
+        handleRouletteButton(id)
+    
+    elseif mode=="coin" then
+        handleCoinButton(id)
+    
+    elseif mode=="hilo" then
+        handleHiloButton(id)
+    
+    elseif mode=="blackjack" then
+        handleBlackjackButton(id)
+    
+    elseif mode=="slots" then
+        handleSlotButton(id)
+    
+    else
+        if id=="back_menu" then
+            mode="menu"
+            drawMainMenu()
+        end
+    end
+end
+
+------------- ERROR HANDLER -------------
+
+local function safeMain()
+    local success, err = pcall(function()
+        mode="menu"
+        drawMainMenu()
+        while true do
+            local e,side,x,y = os.pullEvent("monitor_touch")
+            if side == peripheral.getName(monitor) then
+                local id = hitButton(x,y)
+                if id then handleButton(id) end
+            end
+        end
+    end)
+    
+    if not success then
+        mclearRaw()
+        mcenter(math.floor(mh/2),"FEHLER: "..tostring(err),COLOR_WARNING)
+        mcenter(math.floor(mh/2)+2,"Neustart in 5 Sekunden...",colors.white)
+        sleep(5)
+        os.reboot()
+    end
+end
+
+----------------- MAIN ------------------
+
+safeMain()
