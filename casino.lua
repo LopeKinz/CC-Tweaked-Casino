@@ -26,6 +26,7 @@
 local DIAMOND_ID = "minecraft:diamond"
 local IO_CHEST_DIR = "front"  -- Richtung der IO-Chest von der Bridge aus
 local PLAYER_DETECTION_RANGE = 5  -- Reichweite fuer Player Detector (in Bloecken)
+local STATS_PAGE_SIZE = 6  -- Anzahl der Spieler pro Seite in der Statistik-Ansicht
 
 -- Bridge-Typen die wir suchen
 local BRIDGE_TYPES = { "meBridge", "me_bridge", "rsBridge", "rs_bridge" }
@@ -421,15 +422,13 @@ end
 
 -- Spieler erfassen und tracken
 local function trackPlayers()
-    if not playerDetector then return end
-
-    local ok, playersInRange = pcall(playerDetector.getPlayersInRange, PLAYER_DETECTION_RANGE)
-    if not ok or not playersInRange then return end
+    local detected = getPlayersFromDetector()
+    if #detected.players == 0 then return end
 
     local currentTime = os.epoch("utc")
     local newSeenPlayers = {}
 
-    for _, player in ipairs(playersInRange) do
+    for _, player in ipairs(detected.players) do
         if player and player.name then
             local playerName = player.name
             newSeenPlayers[playerName] = true
@@ -516,11 +515,19 @@ local function formatTime(milliseconds)
     end
 end
 
--- Hole aktuell erkannte Spieler
-local function getCurrentPlayers()
-    if not playerDetector then return {} end
+-- Hole Spieler vom Detector (zentrale Helper-Funktion)
+-- Gibt {players = {...}, names = {...}} zurueck
+-- players: Array von Player-Objekten vom Detector
+-- names: Array von Spielernamen (String)
+local function getPlayersFromDetector()
+    if not playerDetector then
+        return {players = {}, names = {}}
+    end
+
     local ok, playersInRange = pcall(playerDetector.getPlayersInRange, PLAYER_DETECTION_RANGE)
-    if not ok or not playersInRange then return {} end
+    if not ok or not playersInRange then
+        return {players = {}, names = {}}
+    end
 
     local names = {}
     for _, player in ipairs(playersInRange) do
@@ -528,7 +535,13 @@ local function getCurrentPlayers()
             table.insert(names, player.name)
         end
     end
-    return names
+
+    return {players = playersInRange, names = names}
+end
+
+-- Hole aktuell erkannte Spielernamen
+local function getCurrentPlayers()
+    return getPlayersFromDetector().names
 end
 
 -- Statistiken laden beim Start
@@ -961,7 +974,7 @@ local function drawPlayerStatsList(offset)
         return
     end
 
-    local maxVisible = 6
+    local maxVisible = STATS_PAGE_SIZE
     local maxPages = math.ceil(totalPlayers / maxVisible)
     local currentPage = math.floor(offset / maxVisible) + 1
 
@@ -1041,9 +1054,13 @@ local function drawPlayerStatsDetail(playerName)
 
     -- Zeige "Zuletzt gesehen" wenn nicht online
     if not isOnline then
-        local timeSince = os.epoch("utc") - stats.lastSeen
-        local lastSeenStr = formatTime(timeSince) .. " her"
-        mcenter(y, "Zuletzt: " .. lastSeenStr, colors.lightGray, COLOR_PANEL_DARK)
+        if stats.lastSeen and type(stats.lastSeen) == "number" then
+            local timeSince = os.epoch("utc") - stats.lastSeen
+            local lastSeenStr = formatTime(timeSince) .. " her"
+            mcenter(y, "Zuletzt: " .. lastSeenStr, colors.lightGray, COLOR_PANEL_DARK)
+        else
+            mcenter(y, "Zuletzt: unbekannt", colors.lightGray, COLOR_PANEL_DARK)
+        end
     end
     y = y + 1
 
@@ -1336,11 +1353,11 @@ local function handleAdminButton(id)
             drawPlayerStatsList(currentStatsOffset)
 
         elseif id == "stats_prev" then
-            currentStatsOffset = math.max(0, (currentStatsOffset or 0) - 6)
+            currentStatsOffset = math.max(0, (currentStatsOffset or 0) - STATS_PAGE_SIZE)
             drawPlayerStatsList(currentStatsOffset)
 
         elseif id == "stats_next" then
-            currentStatsOffset = (currentStatsOffset or 0) + 6
+            currentStatsOffset = (currentStatsOffset or 0) + STATS_PAGE_SIZE
             drawPlayerStatsList(currentStatsOffset)
 
         elseif id:match("^stats_player_") then
