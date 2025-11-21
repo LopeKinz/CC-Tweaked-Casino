@@ -27,7 +27,7 @@
 -- + Centralized game configuration (GAME_CONFIG) for easier maintenance
 -- + Extracted helper function for disabled game buttons (reduces duplication)
 -- + Enhanced loadGameStatus() with proper validation and merging
--- + Configurable player detection range (PLAYER_DETECTION_RANGE = 5 blocks)
+-- + Configurable player detection range (PLAYER_DETECTION_RANGE = 15 blocks)
 -- + Fixed Player Detector method check (now uses getPlayersInRange)
 -- + Added pagination to player stats list (was limited to 6, now unlimited)
 -- + Online/offline indicators for players in stats view
@@ -47,7 +47,7 @@
 
 local DIAMOND_ID = "minecraft:diamond"
 local IO_CHEST_DIR = "front"  -- Richtung der IO-Chest von der Bridge aus
-local PLAYER_DETECTION_RANGE = 10  -- Reichweite fuer Player Detector (in Bloecken)
+local PLAYER_DETECTION_RANGE = 15  -- Reichweite fuer Player Detector (in Bloecken)
 local STATS_PAGE_SIZE = 6  -- Anzahl der Spieler pro Seite in der Statistik-Ansicht
 
 -- Bridge-Typen die wir suchen
@@ -523,11 +523,18 @@ end
 -- names: Array von Spielernamen (String)
 local function getPlayersFromDetector()
     if not playerDetector then
+        print("[PLAYER DETECTOR] Kein Player Detector verfuegbar")
         return {players = {}, names = {}}
     end
 
     local ok, playersInRange = pcall(playerDetector.getPlayersInRange, PLAYER_DETECTION_RANGE)
-    if not ok or not playersInRange then
+    if not ok then
+        print("[PLAYER DETECTOR] Fehler beim Abrufen der Spieler: "..tostring(playersInRange))
+        return {players = {}, names = {}}
+    end
+
+    if not playersInRange then
+        print("[PLAYER DETECTOR] Keine Spieler in Reichweite ("..PLAYER_DETECTION_RANGE.." Bloecke)")
         return {players = {}, names = {}}
     end
 
@@ -536,6 +543,12 @@ local function getPlayersFromDetector()
         if player and player.name then
             table.insert(names, player.name)
         end
+    end
+
+    if #names > 0 then
+        print("[PLAYER DETECTOR] "..#names.." Spieler erkannt: "..table.concat(names, ", "))
+    else
+        print("[PLAYER DETECTOR] Keine Spieler in Reichweite ("..PLAYER_DETECTION_RANGE.." Bloecke)")
     end
 
     return {players = playersInRange, names = names}
@@ -568,13 +581,21 @@ local function getNearestPlayer(detected)
             if player.x and player.y and player.z then
                 -- Distanz vom Detector (Koordinaten sind relativ zum Detector)
                 local distanceSq = player.x^2 + player.y^2 + player.z^2
+                local distance = math.sqrt(distanceSq)
+                print("[NEAREST PLAYER] "..player.name.." - Distanz: "..string.format("%.2f", distance).." Bloecke (x="..player.x..", y="..player.y..", z="..player.z..")")
                 if distanceSq < minDistanceSq then
                     minDistanceSq = distanceSq
                     nearestPlayer = player.name
                 end
+            else
+                print("[NEAREST PLAYER] "..player.name.." - Keine Koordinaten verfuegbar")
             end
             -- Spieler ohne Koordinaten werden ignoriert (kein Fallback)
         end
+    end
+
+    if nearestPlayer then
+        print("[NEAREST PLAYER] Ausgewaehlt: "..nearestPlayer.." (Distanz: "..string.format("%.2f", math.sqrt(minDistanceSq)).." Bloecke)")
     end
 
     return nearestPlayer
@@ -629,7 +650,15 @@ local function trackPlayers()
             -- Neuer Besuch?
             if not lastSeenPlayers[playerName] then
                 stats.totalVisits = stats.totalVisits + 1
+                print("[TRACKING] Neuer Besuch von: "..playerName.." (Besuch #"..stats.totalVisits..")")
             end
+        end
+    end
+
+    -- Prüfe welche Spieler die Range verlassen haben
+    for playerName, _ in pairs(lastSeenPlayers) do
+        if not newSeenPlayers[playerName] then
+            print("[TRACKING] Spieler hat Range verlassen: "..playerName)
         end
     end
 
@@ -654,6 +683,9 @@ local function trackPlayers()
     -- Verwende bereits ermittelte Detector-Daten um Doppelabfrage zu vermeiden
     local nearestPlayer = getNearestPlayer(detected)
     if nearestPlayer then
+        if currentPlayer ~= nearestPlayer then
+            print("[TRACKING] Neuer naechster Spieler: "..nearestPlayer.." (vorher: "..(currentPlayer or "keiner")..")")
+        end
         currentPlayer = nearestPlayer
     end
 end
