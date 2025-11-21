@@ -1,5 +1,19 @@
 -- casino.lua - CASINO LOUNGE (RS Bridge Support, Pending-Payout Lock)
--- Version 4.1 - Player Stats Improvements & Code Refactoring
+-- Version 4.2 - Player Stats UI Enhancements & Fallback System
+--
+-- Changelog v4.2:
+-- + Fallback player name "Guest" when no Player Detector is available
+-- + Guest player properly tracked with own stats structure, sorted last in rankings
+-- + Guest displayed with "[Gast]" label and special color (lightGray)
+-- + Completely redesigned Player Stats UI with rankings and medals
+-- + Gold/Silver/Bronze colors for top 3 players (theme constants)
+-- + Enhanced detail view with better colors, borders, and layout
+-- + Improved "no players" screen with helpful instructions
+-- + Better visual hierarchy with purple/gold theme
+-- + Enhanced button styling and color consistency
+-- + Centralized Player Stats theme colors (COLOR_STATS_*, COLOR_MEDAL_*, COLOR_STREAK_*)
+-- + Consistent German language for all UI labels (no English/German mix)
+-- + All hardcoded colors replaced with theme constants for easy customization
 --
 -- Changelog v4.1:
 -- + Centralized game configuration (GAME_CONFIG) for easier maintenance
@@ -48,6 +62,16 @@ local COLOR_GOLD        = colors.yellow
 local COLOR_SUCCESS     = colors.green
 local COLOR_DISABLED    = colors.lightGray
 local COLOR_ACCENT      = colors.orange
+
+-- Player Stats Theme Colors
+local COLOR_STATS_HEADER = colors.purple
+local COLOR_STATS_BORDER = colors.yellow  -- Same as COLOR_GOLD
+local COLOR_STATS_ONLINE = colors.cyan
+local COLOR_MEDAL_GOLD   = colors.yellow
+local COLOR_MEDAL_SILVER = colors.lightGray
+local COLOR_MEDAL_BRONZE = colors.orange
+local COLOR_STREAK_WIN   = colors.green
+local COLOR_STREAK_LOSS  = colors.red
 
 -- Game-Status Datei
 local GAME_STATUS_FILE = "game_status.dat"
@@ -538,7 +562,35 @@ end
 -- Spieler erfassen und tracken
 local function trackPlayers()
     local detected = getPlayersFromDetector()
-    if #detected.players == 0 then return end
+
+    -- Fallback: Wenn kein Player Detector vorhanden oder keine Spieler erkannt,
+    -- verwende einen Standard-Spielernamen für Stats-Attribution
+    -- Guest wird für Spielstatistiken verwendet, aber nicht als "besuchender" Spieler getrackt
+    if #detected.players == 0 then
+        if not currentPlayer then
+            currentPlayer = "Guest"
+            -- Erstelle Guest Stats wenn nicht vorhanden (nur für Spiel-Attribution)
+            if not playerStats["Guest"] then
+                playerStats["Guest"] = {
+                    name = "Guest",
+                    firstSeen = os.epoch("utc"),
+                    lastSeen = os.epoch("utc"),
+                    totalVisits = 0,  -- Bleibt 0 für Guest
+                    totalTimeSpent = 0,  -- Wird nicht für Guest getrackt
+                    gamesPlayed = 0,
+                    totalWagered = 0,
+                    totalWon = 0,
+                    totalLost = 0,
+                    biggestWin = 0,
+                    biggestLoss = 0,
+                    currentStreak = 0,
+                    longestWinStreak = 0,
+                    longestLoseStreak = 0
+                }
+            end
+        end
+        return
+    end
 
     local currentTime = os.epoch("utc")
     local newSeenPlayers = {}
@@ -1081,21 +1133,30 @@ local function drawPlayerStatsList(offset)
         currentPlayersSet[name] = true
     end
 
-    -- Spieler sortieren nach Gesamtzeit
+    -- Spieler sortieren nach Gesamtzeit (Guest wird angezeigt aber als letzter)
     local sortedPlayers = {}
     for name, stats in pairs(playerStats) do
         table.insert(sortedPlayers, {name = name, stats = stats})
     end
     table.sort(sortedPlayers, function(a, b)
+        -- Guest kommt immer ans Ende
+        if a.name == "Guest" then return false end
+        if b.name == "Guest" then return true end
         return a.stats.totalTimeSpent > b.stats.totalTimeSpent
     end)
 
     local totalPlayers = #sortedPlayers
 
     if totalPlayers == 0 then
-        drawBox(4,5,mw-3,10,COLOR_PANEL_DARK)
-        mcenter(7,"Keine Spieler erfasst",colors.lightGray,COLOR_PANEL_DARK)
-        mcenter(8,"Stelle Player Detector auf",colors.lightGray,COLOR_PANEL_DARK)
+        -- Verbesserte "Keine Spieler" Anzeige
+        drawBox(4,5,mw-3,11,COLOR_PANEL_DARK)
+        drawBorder(4,5,mw-3,11,COLOR_WARNING)
+
+        mcenter(7,"Keine Spieler erfasst",COLOR_WARNING,COLOR_PANEL_DARK)
+        mcenter(8,"",colors.white,COLOR_PANEL_DARK)
+        mcenter(9,"Spiele ein paar Runden,",colors.lightGray,COLOR_PANEL_DARK)
+        mcenter(10,"um Statistiken zu sammeln!",colors.lightGray,COLOR_PANEL_DARK)
+
         addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
         return
     end
@@ -1104,8 +1165,11 @@ local function drawPlayerStatsList(offset)
     local maxPages = math.ceil(totalPlayers / maxVisible)
     local currentPage = math.floor(offset / maxVisible) + 1
 
-    drawBox(4,4,mw-3,6,COLOR_PANEL_DARK)
-    mcenter(5,"Gesamt: "..totalPlayers.." Spieler (Seite "..currentPage.."/"..maxPages..")",COLOR_GOLD,COLOR_PANEL_DARK)
+    -- Verbesserte Header Box (Theme-Farben)
+    drawBox(4,4,mw-3,6,COLOR_STATS_HEADER)
+    drawBorder(4,4,mw-3,6,COLOR_STATS_BORDER)
+    mcenter(5,"~ SPIELER RANGLISTE ~",COLOR_STATS_BORDER,COLOR_STATS_HEADER)
+    mcenter(6,totalPlayers.." Spieler | Seite "..currentPage.."/"..maxPages,colors.white,COLOR_STATS_HEADER)
 
     local startY = 8
     local startIdx = offset + 1
@@ -1117,33 +1181,56 @@ local function drawPlayerStatsList(offset)
             local btnY = startY + (i-startIdx)*3
             local stats = player.stats
             local timeStr = formatTime(stats.totalTimeSpent)
+            local rank = i  -- Platzierung
 
-            -- Online-Indikator
-            local onlineMarker = currentPlayersSet[player.name] and "[ONLINE] " or ""
-            local label = onlineMarker..player.name.."\n"..stats.gamesPlayed.." Spiele | "..timeStr
+            -- Verbesserte Labels mit Ranking (Guest bekommt keine Nummer)
+            local rankStr = player.name == "Guest" and "[Gast]" or "#"..rank
+            local onlineMarker = currentPlayersSet[player.name] and " [ONLINE]" or ""
+            local label = rankStr.." "..player.name..onlineMarker.."\n"..stats.gamesPlayed.." Spiele | "..timeStr
+
+            -- Verbesserte Farben basierend auf Status und Platzierung (Theme-Farben)
             local btnColor = COLOR_PANEL
+            local textColor = colors.white
+
             if currentPlayersSet[player.name] then
-                btnColor = colors.cyan  -- Cyan fuer online Spieler
+                btnColor = COLOR_STATS_ONLINE  -- Cyan für online Spieler
+                textColor = colors.black
+            elseif player.name == "Guest" then
+                -- Guest bekommt eine spezielle Farbe
+                btnColor = COLOR_DISABLED
+                textColor = colors.black
+            elseif rank <= 3 then
+                -- Top 3 bekommen spezielle Farben (Theme)
+                if rank == 1 then
+                    btnColor = COLOR_MEDAL_GOLD  -- Gold für Platz 1
+                    textColor = colors.black
+                elseif rank == 2 then
+                    btnColor = COLOR_MEDAL_SILVER  -- Silber für Platz 2
+                    textColor = colors.black
+                elseif rank == 3 then
+                    btnColor = COLOR_MEDAL_BRONZE  -- Bronze für Platz 3
+                    textColor = colors.black
+                end
             elseif stats.currentStreak > 0 then
-                btnColor = colors.green
+                btnColor = COLOR_STREAK_WIN
             elseif stats.currentStreak < 0 then
-                btnColor = colors.red
+                btnColor = COLOR_STREAK_LOSS
             end
 
-            addButton("stats_player_"..player.name, 4, btnY, mw-3, btnY+2, label, colors.white, btnColor)
+            addButton("stats_player_"..player.name, 4, btnY, mw-3, btnY+2, label, textColor, btnColor)
         end
     end
 
-    -- Pagination buttons
+    -- Pagination buttons mit verbessertem Design (Theme-Farben)
     local btnY = mh - 6
     if offset > 0 then
-        addButton("stats_prev",4,btnY,math.floor(mw/2)-1,btnY+1,"<< Vorherige",colors.white,COLOR_PANEL)
+        addButton("stats_prev",4,btnY,math.floor(mw/2)-1,btnY+1,"<< Vorherige",colors.black,COLOR_INFO)
     end
     if endIdx < totalPlayers then
-        addButton("stats_next",math.floor(mw/2)+1,btnY,mw-3,btnY+1,"Naechste >>",colors.white,COLOR_PANEL)
+        addButton("stats_next",math.floor(mw/2)+1,btnY,mw-3,btnY+1,"Naechste >>",colors.black,COLOR_INFO)
     end
 
-    addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
+    addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_STATS_HEADER)
 end
 
 -- Detail-Ansicht eines Spielers
@@ -1154,6 +1241,7 @@ local function drawPlayerStatsDetail(playerName)
     if not stats then
         drawChrome("Fehler","Spieler nicht gefunden")
         drawBox(4,8,mw-3,12,COLOR_WARNING)
+        drawBorder(4,8,mw-3,12,COLOR_STATS_BORDER)
         mcenter(10,"Spieler nicht gefunden!",colors.white,COLOR_WARNING)
         sleep(1.5)
         drawPlayerStatsList(0)
@@ -1172,90 +1260,96 @@ local function drawPlayerStatsDetail(playerName)
 
     drawChrome("Spieler-Profil","Detaillierte Statistiken")
 
-    -- Header Box mit Spielername
-    drawBox(4,4,mw-3,7,isOnline and colors.cyan or COLOR_PANEL)
-    drawBorder(4,4,mw-3,7,COLOR_GOLD)
+    -- Verbesserte Header Box mit Spielername (Theme-Farben)
+    local headerBg = isOnline and COLOR_STATS_ONLINE or COLOR_STATS_HEADER
+    drawBox(4,4,mw-3,8,headerBg)
+    drawBorder(4,4,mw-3,8,COLOR_STATS_BORDER)
 
     local y = 5
-    local nameLabel = playerName
-    mcenter(y, nameLabel, colors.white, isOnline and colors.cyan or COLOR_PANEL); y = y + 1
+    mcenter(y, "~ "..playerName.." ~", COLOR_STATS_BORDER, headerBg); y = y + 1
 
-    local statusLabel = isOnline and "[ONLINE]" or "OFFLINE"
-    local statusColor = isOnline and colors.lime or colors.lightGray
-    mcenter(y, statusLabel, statusColor, isOnline and colors.cyan or COLOR_PANEL); y = y + 1
+    local statusLabel = isOnline and "[ONLINE]" or "[OFFLINE]"
+    local statusColor = isOnline and COLOR_SUCCESS or COLOR_DISABLED
+    mcenter(y, statusLabel, statusColor, headerBg); y = y + 1
 
-    -- Zeige "Zuletzt gesehen" wenn nicht online
+    -- Zeige "Zuletzt gesehen" oder Spielzeit
     if not isOnline then
         if stats.lastSeen and type(stats.lastSeen) == "number" then
             local timeSince = os.epoch("utc") - stats.lastSeen
             local lastSeenStr = formatTime(timeSince) .. " her"
-            mcenter(y, "Zuletzt: " .. lastSeenStr, colors.lightGray, isOnline and colors.cyan or COLOR_PANEL)
+            mcenter(y, "Zuletzt: " .. lastSeenStr, COLOR_DISABLED, headerBg); y = y + 1
         else
-            mcenter(y, "Zuletzt: unbekannt", colors.lightGray, isOnline and colors.cyan or COLOR_PANEL)
+            mcenter(y, "Zuletzt: unbekannt", COLOR_DISABLED, headerBg); y = y + 1
         end
+    else
+        mcenter(y, "Spielzeit: " .. formatTime(stats.totalTimeSpent), colors.white, headerBg); y = y + 1
     end
 
-    -- Statistik Box
-    y = 9
+    -- Statistik Box mit Rahmen (Theme-Farben)
+    y = 10
     drawBox(4,y,mw-3,mh-5,COLOR_PANEL_DARK)
+    drawBorder(4,y,mw-3,mh-5,COLOR_STATS_HEADER)
     y = y + 1
 
-    -- Aktivitäts-Statistiken
-    mcenter(y, "--- AKTIVITAET ---", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
+    -- Aktivitäts-Statistiken mit Symbolen
+    mcenter(y, "=== AKTIVITAET ===", COLOR_STATS_BORDER, COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"# Besuche:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(6,y,"# Besuche:",COLOR_DISABLED,COLOR_PANEL_DARK)
     mwrite(mw-15,y,tostring(stats.totalVisits),colors.white,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"# Spielzeit:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(6,y,"# Spielzeit:",COLOR_DISABLED,COLOR_PANEL_DARK)
     mwrite(mw-15,y,formatTime(stats.totalTimeSpent),COLOR_INFO,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"# Spiele:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(6,y,"# Spiele:",COLOR_DISABLED,COLOR_PANEL_DARK)
     mwrite(mw-15,y,tostring(stats.gamesPlayed),colors.white,COLOR_PANEL_DARK); y = y + 2
 
-    -- Finanz-Statistiken
-    mcenter(y, "--- FINANZEN ---", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
+    -- Finanz-Statistiken mit besseren Farben (Theme-Farben)
+    mcenter(y, "=== FINANZEN ===", COLOR_STATS_BORDER, COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"$ Gesetzt:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.totalWagered.." Dia",colors.orange,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,"$ Gesetzt:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.totalWagered.." Dia",COLOR_ACCENT,COLOR_PANEL_DARK); y = y + 1
 
     local netProfit = stats.totalWon - stats.totalLost
     local profitColor = netProfit >= 0 and COLOR_SUCCESS or COLOR_WARNING
-    mwrite(6,y,"$ Netto:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(6,y,"$ Netto:",COLOR_DISABLED,COLOR_PANEL_DARK)
     local netText = netProfit >= 0 and "+"..netProfit or tostring(netProfit)
     mwrite(mw-15,y,netText.." Dia",profitColor,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"$ Top Gewinn:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,"+"..stats.biggestWin.." Dia",colors.lime,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,"$ Groesster Gewinn:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,"+"..stats.biggestWin.." Dia",COLOR_SUCCESS,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"$ Top Verlust:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,"-"..stats.biggestLoss.." Dia",colors.red,COLOR_PANEL_DARK); y = y + 2
+    mwrite(6,y,"$ Groesster Verlust:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,"-"..stats.biggestLoss.." Dia",COLOR_WARNING,COLOR_PANEL_DARK); y = y + 2
 
-    -- Streak-Statistiken
-    mcenter(y, "--- SERIEN ---", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
+    -- Streak-Statistiken mit Verbesserungen (Theme-Farben + Deutsche Labels)
+    mcenter(y, "=== SERIEN ===", COLOR_STATS_BORDER, COLOR_PANEL_DARK); y = y + 1
 
     local streakText = ""
     local streakColor = colors.white
     local streakIcon = ""
     if stats.currentStreak > 0 then
         streakText = "+"..stats.currentStreak.." Siege"
-        streakColor = colors.lime
-        streakIcon = "^ "
+        streakColor = COLOR_STREAK_WIN
+        streakIcon = ">> "
     elseif stats.currentStreak < 0 then
         streakText = math.abs(stats.currentStreak).." Niederlagen"
-        streakColor = colors.red
-        streakIcon = "v "
+        streakColor = COLOR_STREAK_LOSS
+        streakIcon = "<< "
     else
         streakText = "Keine Serie"
-        streakColor = colors.lightGray
-        streakIcon = "- "
+        streakColor = COLOR_DISABLED
+        streakIcon = "-- "
     end
-    mwrite(6,y,streakIcon.."Aktuell:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(6,y,streakIcon.."Aktuell:",COLOR_DISABLED,COLOR_PANEL_DARK)
     mwrite(mw-20,y,streakText,streakColor,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"^ Beste:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.longestWinStreak.." Siege",colors.lime,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,">> Beste Serie:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.longestWinStreak.." Siege",COLOR_STREAK_WIN,COLOR_PANEL_DARK); y = y + 1
 
-    addButton("player_detail_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
+    mwrite(6,y,"<< Schlechteste:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.longestLoseStreak.." Niederlagen",COLOR_STREAK_LOSS,COLOR_PANEL_DARK); y = y + 1
+
+    addButton("player_detail_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_STATS_HEADER)
 end
 
 local function drawAdminPanel()
