@@ -1964,52 +1964,6 @@ local function handleAdminButton(id)
     end
 end
 
-------------- PLAYER SELECTION HANDLER --------------
-
-local function handlePlayerSelectionButton(id)
-    if id:match("^select_player_") then
-        -- Extract player name from button ID
-        local selectedPlayer = id:match("^select_player_(.+)$")
-
-        if selectedPlayer then
-            -- Set the selected player as current player
-            currentPlayer = selectedPlayer
-            print("[PLAYER SELECT] Spieler gewaehlt: "..selectedPlayer)
-
-            -- Start the game that was requested
-            if nextGameMode == "roulette" then
-                mode = "roulette"
-                r_drawChooseType()
-            elseif nextGameMode == "coin" then
-                mode = "coin"
-                c_state = "stake"
-                c_player = nil
-                c_drawStake()
-            elseif nextGameMode == "hilo" then
-                mode = "hilo"
-                h_drawStake()
-            elseif nextGameMode == "blackjack" then
-                mode = "blackjack"
-                bj_drawStake()
-            elseif nextGameMode == "slots" then
-                mode = "slots"
-                s_drawStake()
-            else
-                -- Fallback to menu if no game specified
-                mode = "menu"
-                drawMainMenu()
-            end
-
-            nextGameMode = nil  -- Reset
-        end
-    elseif id == "player_select_back" then
-        -- Return to main menu
-        mode = "menu"
-        nextGameMode = nil
-        drawMainMenu()
-    end
-end
-
 ------------- ROULETTE -----------------
 
 local redNumbers = {
@@ -3418,6 +3372,52 @@ local function drawSlotsSimple()
   s_freeSpinBet = 0
   s_player = nil  -- Reset player tracking
   s_drawScreen()
+end
+
+------------- PLAYER SELECTION HANDLER --------------
+
+local function handlePlayerSelectionButton(id)
+    if id:match("^select_player_") then
+        -- Extract player name from button ID
+        local selectedPlayer = id:match("^select_player_(.+)$")
+
+        if selectedPlayer then
+            -- Set the selected player as current player
+            currentPlayer = selectedPlayer
+            print("[PLAYER SELECT] Spieler gewaehlt: "..selectedPlayer)
+
+            -- Start the game that was requested
+            if nextGameMode == "roulette" then
+                mode = "roulette"
+                r_drawChooseType()
+            elseif nextGameMode == "coin" then
+                mode = "coin"
+                c_state = "stake"
+                c_player = nil
+                c_drawStake()
+            elseif nextGameMode == "hilo" then
+                mode = "hilo"
+                h_drawStake()
+            elseif nextGameMode == "blackjack" then
+                mode = "blackjack"
+                bj_drawStake()
+            elseif nextGameMode == "slots" then
+                mode = "slots"
+                drawSlotsSimple()
+            else
+                -- Fallback to menu if no game specified
+                mode = "menu"
+                drawMainMenu()
+            end
+
+            nextGameMode = nil  -- Reset
+        end
+    elseif id == "player_select_back" then
+        -- Return to main menu
+        mode = "menu"
+        nextGameMode = nil
+        drawMainMenu()
+    end
 end
 
 ------------- GLOBAL TOUCH --------------
