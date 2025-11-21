@@ -253,13 +253,13 @@ if not bridge then
 end
 
 -- Player Detector suchen (links vom Computer)
-local playerDetector = peripheral.wrap("left")
-if playerDetector and playerDetector.getPlayersInRange then
+local player_detector = peripheral.wrap("left")
+if player_detector and player_detector.getPlayersInRange then
     print("Player Detector gefunden: left")
     print("Erkennungsreichweite: " .. PLAYER_DETECTION_RANGE .. " Bloecke")
 else
     print("WARNUNG: Kein Player Detector auf 'left' gefunden!")
-    playerDetector = nil
+    player_detector = nil
 end
 
 print("Casino gestartet auf Monitor: " .. peripheral.getName(monitor))
@@ -561,12 +561,21 @@ end
 -- players: Array von Player-Objekten vom Detector
 -- names: Array von Spielernamen (String)
 local function getPlayersFromDetector()
-    if not playerDetector then
+    -- Check if player_detector peripheral is still present
+    if player_detector then
+        local detectorName = peripheral.getName(player_detector)
+        if not detectorName or not peripheral.isPresent(detectorName) then
+            print("[PLAYER DETECTOR] Player Detector wurde entfernt!")
+            player_detector = nil
+        end
+    end
+
+    if not player_detector then
         print("[PLAYER DETECTOR] Kein Player Detector verfuegbar")
         return {players = {}, names = {}}
     end
 
-    local ok, playersInRange = pcall(playerDetector.getPlayersInRange, PLAYER_DETECTION_RANGE)
+    local ok, playersInRange = pcall(player_detector.getPlayersInRange, PLAYER_DETECTION_RANGE)
     if not ok then
         print("[PLAYER DETECTOR] Fehler beim Abrufen der Spieler: "..tostring(playersInRange))
         return {players = {}, names = {}}
@@ -810,17 +819,46 @@ end
 -- Statistiken laden beim Start
 loadPlayerStats()
 
+-- Issue #21: Ensure Guest stats exist at startup
+if not playerStats["Guest"] then
+    playerStats["Guest"] = {
+        name = "Guest",
+        firstSeen = os.epoch("utc"),
+        lastSeen = os.epoch("utc"),
+        totalVisits = 0,
+        totalTimeSpent = 0,
+        gamesPlayed = 0,
+        totalWagered = 0,
+        totalWon = 0,
+        totalLost = 0,
+        biggestWin = 0,
+        biggestLoss = 0,
+        currentStreak = 0,
+        longestWinStreak = 0,
+        longestLoseStreak = 0
+    }
+    safeSavePlayerStats("Guest initialization at startup")
+end
+
 ----------- INVENTAR / STORAGE ------------
 
 -- Diamanten im Netzwerk zählen (Casino-Bank-Reserve)
 local function getItemCountInNet(name)
     if not bridge then
-        print("[FEHLER] getItemCountInNet: Bridge nicht verfügbar!")
-        return 0
+        error("[FEHLER] getItemCountInNet: Bridge nicht verfügbar! Hardware-Problem!")
     end
 
     local ok, res = pcall(bridge.getItem, { name = name })
-    if not ok or not res then return 0 end
+    if not ok then
+        print("[FEHLER] getItemCountInNet pcall fehlgeschlagen: "..tostring(res))
+        return 0  -- Bei temporären Fehlern 0 zurückgeben
+    end
+
+    if not res then
+        print("[INFO] getItemCountInNet: Item nicht im System gefunden")
+        return 0  -- Kein Item = 0 ist korrekt
+    end
+
     return res.amount or res.count or 0
 end
 
@@ -832,33 +870,31 @@ local function getPlayerBalance()
     -- Chest direkt vom Computer auslesen
     -- IO_CHEST_DIR = Seite vom Computer aus (z.B. "front")
     local chest = peripheral.wrap(IO_CHEST_DIR)
-    if chest and chest.list then
-        local total = 0
-        local ok, list = pcall(chest.list)
-        if ok and type(list) == "table" then
-            for _, stack in pairs(list) do
-                if stack and stack.name == DIAMOND_ID then
-                    total = total + (stack.count or 0)
-                end
-            end
-        else
-            if not ok then
-                print("[WARNUNG] getPlayerBalance chest.list() Fehler: "..tostring(list))
-            end
-        end
-        return total
-    else
-        print("[WARNUNG] getPlayerBalance: Keine Chest auf '"..IO_CHEST_DIR.."' gefunden")
+    if not chest or not chest.list then
+        error("[FEHLER] getPlayerBalance: Keine Chest auf '"..IO_CHEST_DIR.."' gefunden! Hardware-Problem!")
     end
 
-    -- Wenn alles schief geht: 0
-    return 0
+    local total = 0
+    local ok, list = pcall(chest.list)
+    if ok and type(list) == "table" then
+        for _, stack in pairs(list) do
+            if stack and stack.name == DIAMOND_ID then
+                total = total + (stack.count or 0)
+            end
+        end
+    else
+        print("[WARNUNG] getPlayerBalance chest.list() Fehler: "..tostring(list))
+        print("[INFO] Returniere 0 bei list() Fehler")
+        return 0
+    end
+
+    return total
 end
 
 
 -- Einsatz: Nimm Diamanten aus IO-Chest und packe sie ins Netzwerk (Casino-Bank)
 local function takeStake(amount)
-    amount = tonumber(amount) or 0
+    amount = math.floor(tonumber(amount) or 0)  -- Issue #13: Ensure integer
     if amount <= 0 then return 0 end
 
     if not bridge then
@@ -904,7 +940,7 @@ local MAX_EXPORT_CHUNK = 4096   -- kannst du bei Bedarf anpassen
 
 
 local function rawExportDiamonds(amount)
-    amount = tonumber(amount) or 0
+    amount = math.floor(tonumber(amount) or 0)  -- Issue #13: Ensure integer
     if amount <= 0 then return 0 end
 
     if not bridge then
@@ -973,7 +1009,7 @@ end
 
 -- Gewinn: Zahle Diamanten aus Netzwerk (Casino-Bank) in IO-Chest
 local function payPayout(amount)
-    amount = tonumber(amount) or 0
+    amount = math.floor(tonumber(amount) or 0)  -- Issue #13: Ensure integer
 
     -- Erst versuchen, offene Gewinne weiter auszuzahlen
     flushPendingPayoutIfPossible()
@@ -1002,14 +1038,9 @@ end
 
 ------------- GLOBAL STATE -------------
 
--- App State (grouped)
-local AppState = {
-    mode = "menu",
-    currentPlayer = nil
-}
-
-local mode = AppState.mode
-local currentPlayer = AppState.currentPlayer
+-- App State (no longer using AppState table - Issue #18 fix)
+local mode = "menu"
+local currentPlayer = nil
 
 -- Admin State (grouped)
 local AdminState = {
@@ -2615,7 +2646,8 @@ local function bj_dealerPlay()
   if playerVal > 21 then
     bj_lastResult = "lose"
   elseif bj_isBlackjack(bj_playerHand) and not bj_isBlackjack(bj_dealerHand) then
-    local paid = payPayout(math.floor(bj_stake * 2.5))
+    -- Issue #10: Proper 3:2 blackjack payout (stake + 1.5x profit)
+    local paid = payPayout(bj_stake + math.floor(bj_stake * 1.5))
     bj_lastWin = true
     bj_lastPayout = paid
     bj_lastResult = "blackjack"
@@ -2642,7 +2674,8 @@ local function bj_dealerPlay()
   end
 
   -- Statistik erfassen (verwende bj_player statt currentPlayer für korrekte Attribution)
-  if bj_player then
+  -- Issue #9: Don't count pushes (ties) in stats
+  if bj_player and bj_lastResult ~= "push" then
     updateGameStats(bj_player, bj_stake, bj_lastWin, bj_lastPayout)
   end
 
