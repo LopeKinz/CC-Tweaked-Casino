@@ -3286,6 +3286,10 @@ local function handleButton(id)
             mode="blackjack"; drawBlackjackSimple()
         elseif id=="game_slots" and gameStatus.slots then
             mode="slots"; drawSlotsSimple()
+        elseif id=="player_stats" then
+            mode="admin"
+            AdminState.currentStatsOffset = 0
+            drawPlayerStatsList(0)
         elseif id=="admin_panel" then
             mode="admin"
             AdminState.pinInput = ""
