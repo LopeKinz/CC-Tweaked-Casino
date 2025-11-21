@@ -934,14 +934,8 @@ local AdminState = {
     PIN = "1234",
     panelOpen = false,
     pinInput = "",
-    AdminState.currentStatsOffset = 0
+    currentStatsOffset = 0
 }
-
--- Backwards compatibility aliases
-local AdminState.PIN = AdminState.PIN
-local AdminState.panelOpen = AdminState.panelOpen
-local AdminState.pinInput = AdminState.pinInput
-local AdminState.currentStatsOffset = AdminState.AdminState.currentStatsOffset
 
 -- Game State Variables (grouped to reduce local count)
 local GameState = {
