@@ -407,9 +407,22 @@ local function loadPlayerStats()
 
     if not success then
         print("[FEHLER] loadPlayerStats: "..tostring(err))
+
+        -- Backup corrupt file before overwriting
+        if fs.exists(STATS_FILE) then
+            local backupFile = STATS_FILE .. ".backup." .. os.epoch("utc")
+            local backupSuccess, backupErr = pcall(function()
+                fs.copy(STATS_FILE, backupFile)
+                print("[INFO] Korrupte Datei gesichert als: " .. backupFile)
+            end)
+            if not backupSuccess then
+                print("[WARNUNG] Konnte Backup nicht erstellen: " .. tostring(backupErr))
+            end
+        end
+
         print("[INFO] Erstelle neue leere Statistik-Datei")
         playerStats = {}
-        savePlayerStats()
+        safeSavePlayerStats("loadPlayerStats")
     end
 end
 
@@ -490,13 +503,17 @@ end
 
 -- Ermittle den nächsten Spieler am Terminal (für Statistikerfassung)
 -- Akzeptiert bereits ermittelte Detector-Daten um Doppelabfragen zu vermeiden
+--
+-- WICHTIG: Die x/y/z Koordinaten vom Player Detector sind RELATIV zum Detector-Block.
+-- Das bedeutet: (0,0,0) = Detector-Position, und distanceSq = x^2+y^2+z^2 ist die
+-- quadrierte Distanz vom Detector (korrekt für nächsten Spieler).
 local function getNearestPlayer(detected)
     if not detected or not detected.players or #detected.players == 0 then
         return nil
     end
 
     -- Nimm einfach den ersten/nächsten Spieler
-    -- Bei mehreren Spielern: der mit der kürzesten Distanz
+    -- Bei mehreren Spielern: der mit der kürzesten Distanz vom Detector
     local nearestPlayer = nil
     local minDistanceSq = math.huge  -- Verwende quadrierte Distanz um sqrt zu vermeiden
 
@@ -504,6 +521,7 @@ local function getNearestPlayer(detected)
         if player and player.name then
             -- Nur Spieler mit gültigen Koordinaten berücksichtigen
             if player.x and player.y and player.z then
+                -- Distanz vom Detector (Koordinaten sind relativ zum Detector)
                 local distanceSq = player.x^2 + player.y^2 + player.z^2
                 if distanceSq < minDistanceSq then
                     minDistanceSq = distanceSq
