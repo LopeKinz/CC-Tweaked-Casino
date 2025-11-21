@@ -496,9 +496,13 @@ local function getNearestPlayer()
 
     for _, player in ipairs(detected.players) do
         if player and player.name then
-            local distance = 0
+            local distance = math.huge  -- Default: weit weg
             if player.x and player.y and player.z then
+                -- Berechne Distanz nur wenn Koordinaten verfügbar
                 distance = math.sqrt(player.x^2 + player.y^2 + player.z^2)
+            else
+                -- Fallback: wenn keine Koordinaten, nimm diesen Spieler mit Priorität 0
+                distance = 0
             end
             if distance < minDistance then
                 minDistance = distance
@@ -640,35 +644,22 @@ loadPlayerStats()
 
 -- Diamanten im Netzwerk zählen (Casino-Bank-Reserve)
 local function getItemCountInNet(name)
+    if not bridge then
+        print("[FEHLER] getItemCountInNet: Bridge nicht verfügbar!")
+        return 0
+    end
+
     local ok, res = pcall(bridge.getItem, { name = name })
     if not ok or not res then return 0 end
     return res.amount or res.count or 0
 end
 
 -- Diamanten in IO-Chest zählen (Spieler-Guthaben)
--- nutzt RS-/ME-bridge listItems(Direction)
--- Diamanten in IO-Chest zählen (Spieler-Guthaben)
--- 1) zuerst über die Bridge (Chest an RS/ME)
--- 2) falls das nichts liefert, direkt die Chest als Peripherie auslesen
+-- Die IO-Chest muss direkt am Computer angeschlossen sein (nicht über Bridge!)
+-- HINWEIS: bridge.listItems() listet das GESAMTE ME-System, nicht eine einzelne Chest
+-- Daher lesen wir die Chest direkt als Peripherie aus
 local function getPlayerBalance()
-    -- 1. Versuch: über die Bridge (Chest ist an der Bridge auf IO_CHEST_DIR angeschlossen)
-    if bridge and bridge.listItems then
-        local ok, items = pcall(bridge.listItems, IO_CHEST_DIR)
-        if ok and type(items) == "table" then
-            local total = 0
-            -- pairs statt ipairs, falls die Bridge eine Map zurückgibt
-            for _, item in pairs(items) do
-                if item.name == DIAMOND_ID then
-                    total = total + (item.count or item.amount or 0)
-                end
-            end
-            if total > 0 then
-                return total
-            end
-        end
-    end
-
-    -- 2. Versuch: Chest direkt vor dem Computer auslesen
+    -- Chest direkt vom Computer auslesen
     -- IO_CHEST_DIR = Seite vom Computer aus (z.B. "front")
     local chest = peripheral.wrap(IO_CHEST_DIR)
     if chest and chest.list then
@@ -676,12 +667,18 @@ local function getPlayerBalance()
         local ok, list = pcall(chest.list)
         if ok and type(list) == "table" then
             for _, stack in pairs(list) do
-                if stack.name == DIAMOND_ID then
+                if stack and stack.name == DIAMOND_ID then
                     total = total + (stack.count or 0)
                 end
             end
+        else
+            if not ok then
+                print("[WARNUNG] getPlayerBalance chest.list() Fehler: "..tostring(list))
+            end
         end
         return total
+    else
+        print("[WARNUNG] getPlayerBalance: Keine Chest auf '"..IO_CHEST_DIR.."' gefunden")
     end
 
     -- Wenn alles schief geht: 0
@@ -694,18 +691,23 @@ local function takeStake(amount)
     amount = tonumber(amount) or 0
     if amount <= 0 then return 0 end
 
+    if not bridge then
+        print("[FEHLER] takeStake: Bridge nicht verfügbar!")
+        return 0
+    end
+
     print(("[EINSATZ] Nehme %d Diamanten aus IO-Chest '%s'"):format(amount, IO_CHEST_DIR))
-    
+
     local ok, imported = pcall(bridge.importItem,
         { name = DIAMOND_ID, count = amount },
         IO_CHEST_DIR
     )
-    
+
     if not ok then
         print("[FEHLER] importItem:", imported)
         return 0
     end
-    
+
     local result = imported or 0
     print("[EINSATZ] Genommen:", result)
     return result
@@ -725,6 +727,11 @@ local MAX_EXPORT_CHUNK = 4096   -- kannst du bei Bedarf anpassen
 local function rawExportDiamonds(amount)
     amount = tonumber(amount) or 0
     if amount <= 0 then return 0 end
+
+    if not bridge then
+        print("[FEHLER] rawExportDiamonds: Bridge nicht verfügbar!")
+        return 0
+    end
 
     print(("[GEWINN-RAW] Versuche %d Diamanten nach '%s' zu exportieren"):format(amount, IO_CHEST_DIR))
 
@@ -2887,12 +2894,19 @@ local function safeMain()
         -- Tracking-Timer starten
         local trackingTimer = os.startTimer(2)
 
+        -- Monitor-Namen für Event-Vergleich speichern
+        local monitorName = peripheral.getName(monitor)
+
         while true do
             local e, param1, x, y = os.pullEvent()
 
             if e == "monitor_touch" then
                 local side = param1
-                if side == peripheral.getName(monitor) then
+                -- Prüfe ob der Monitor noch existiert
+                if not monitor or not peripheral.isPresent(monitorName) then
+                    error("Monitor wurde entfernt!")
+                end
+                if side == monitorName then
                     local id = hitButton(x,y)
                     if id then handleButton(id) end
                 end
@@ -2900,14 +2914,32 @@ local function safeMain()
                 -- Spieler tracken alle 2 Sekunden
                 trackPlayers()
                 trackingTimer = os.startTimer(2)
+            elseif e == "peripheral_detach" then
+                -- Prüfe ob es der Monitor oder die Bridge war
+                if param1 == monitorName then
+                    error("Monitor wurde entfernt!")
+                elseif param1 == peripheral.getName(bridge) then
+                    error("Bridge wurde entfernt!")
+                end
             end
         end
     end)
-    
+
     if not success then
-        mclearRaw()
-        mcenter(math.floor(mh/2),"FEHLER: "..tostring(err),COLOR_WARNING)
-        mcenter(math.floor(mh/2)+2,"Neustart in 5 Sekunden...",colors.white)
+        -- Versuche Fehler auf Monitor anzuzeigen, falls noch verfügbar
+        local displaySuccess, displayErr = pcall(function()
+            if monitor and peripheral.isPresent(peripheral.getName(monitor)) then
+                mclearRaw()
+                mcenter(math.floor(mh/2),"FEHLER: "..tostring(err),COLOR_WARNING)
+                mcenter(math.floor(mh/2)+2,"Neustart in 5 Sekunden...",colors.white)
+            end
+        end)
+
+        if not displaySuccess then
+            print("Kritischer Fehler: "..tostring(err))
+            print("Display-Fehler: "..tostring(displayErr))
+        end
+
         sleep(5)
         os.reboot()
     end
