@@ -25,7 +25,7 @@
 
 local DIAMOND_ID = "minecraft:diamond"
 local IO_CHEST_DIR = "front"  -- Richtung der IO-Chest von der Bridge aus
-local PLAYER_DETECTION_RANGE = 5  -- Reichweite fuer Player Detector (in Bloecken)
+local PLAYER_DETECTION_RANGE = 10  -- Reichweite fuer Player Detector (in Bloecken)
 local STATS_PAGE_SIZE = 6  -- Anzahl der Spieler pro Seite in der Statistik-Ansicht
 
 -- Bridge-Typen die wir suchen
@@ -368,29 +368,81 @@ end
 
 -- Statistiken laden
 local function loadPlayerStats()
-    if not fs.exists(STATS_FILE) then
-        playerStats = {}
-        return
-    end
-    local file = fs.open(STATS_FILE, "r")
-    if file then
+    local success, err = pcall(function()
+        if not fs.exists(STATS_FILE) then
+            playerStats = {}
+            return
+        end
+
+        local file = fs.open(STATS_FILE, "r")
+        if not file then
+            error("Konnte Datei nicht öffnen: "..STATS_FILE)
+        end
+
         local content = file.readAll()
         file.close()
-        playerStats = textutils.unserialize(content) or {}
+
+        if not content or content == "" then
+            playerStats = {}
+            return
+        end
+
+        local deserialized = textutils.unserialize(content)
+        if not deserialized or type(deserialized) ~= "table" then
+            error("Ungültige Daten in Statistik-Datei")
+        end
+
+        playerStats = deserialized
 
         -- Sanitize all loaded player stats to ensure numeric fields are numbers
         for playerName, stats in pairs(playerStats) do
-            playerStats[playerName] = sanitizeStats(stats)
+            if type(stats) == "table" then
+                playerStats[playerName] = sanitizeStats(stats)
+            else
+                print("[WARNUNG] Ungültige Stats für Spieler: "..tostring(playerName))
+                playerStats[playerName] = nil
+            end
         end
+    end)
+
+    if not success then
+        print("[FEHLER] loadPlayerStats: "..tostring(err))
+
+        -- Backup corrupt file before overwriting
+        if fs.exists(STATS_FILE) then
+            local backupFile = STATS_FILE .. ".backup." .. os.epoch("utc")
+            local backupSuccess, backupErr = pcall(function()
+                fs.copy(STATS_FILE, backupFile)
+                print("[INFO] Korrupte Datei gesichert als: " .. backupFile)
+            end)
+            if not backupSuccess then
+                print("[WARNUNG] Konnte Backup nicht erstellen: " .. tostring(backupErr))
+            end
+        end
+
+        print("[INFO] Erstelle neue leere Statistik-Datei")
+        playerStats = {}
+        safeSavePlayerStats("loadPlayerStats")
     end
 end
 
 -- Statistiken speichern
 local function savePlayerStats()
+    -- Einfaches Speichern ohne eigenes Error-Handling
+    -- (Error-Handling erfolgt zentral in safeSavePlayerStats)
     local file = fs.open(STATS_FILE, "w")
-    if file then
-        file.write(textutils.serialize(playerStats))
-        file.close()
+    if not file then
+        error("Konnte Datei nicht öffnen: "..STATS_FILE)
+    end
+    file.write(textutils.serialize(playerStats))
+    file.close()
+end
+
+-- Helper: Sicher speichern mit einheitlichem Error-Handling
+local function safeSavePlayerStats(context)
+    local ok, err = pcall(savePlayerStats)
+    if not ok then
+        print("[FEHLER] " .. (context or "safeSavePlayerStats") .. ": Konnte Stats nicht speichern: " .. tostring(err))
     end
 end
 
@@ -449,6 +501,40 @@ local function getCurrentPlayers()
     return getPlayersFromDetector().names
 end
 
+-- Ermittle den nächsten Spieler am Terminal (für Statistikerfassung)
+-- Akzeptiert bereits ermittelte Detector-Daten um Doppelabfragen zu vermeiden
+--
+-- WICHTIG: Die x/y/z Koordinaten vom Player Detector sind RELATIV zum Detector-Block.
+-- Das bedeutet: (0,0,0) = Detector-Position, und distanceSq = x^2+y^2+z^2 ist die
+-- quadrierte Distanz vom Detector (korrekt für nächsten Spieler).
+local function getNearestPlayer(detected)
+    if not detected or not detected.players or #detected.players == 0 then
+        return nil
+    end
+
+    -- Nimm einfach den ersten/nächsten Spieler
+    -- Bei mehreren Spielern: der mit der kürzesten Distanz vom Detector
+    local nearestPlayer = nil
+    local minDistanceSq = math.huge  -- Verwende quadrierte Distanz um sqrt zu vermeiden
+
+    for _, player in ipairs(detected.players) do
+        if player and player.name then
+            -- Nur Spieler mit gültigen Koordinaten berücksichtigen
+            if player.x and player.y and player.z then
+                -- Distanz vom Detector (Koordinaten sind relativ zum Detector)
+                local distanceSq = player.x^2 + player.y^2 + player.z^2
+                if distanceSq < minDistanceSq then
+                    minDistanceSq = distanceSq
+                    nearestPlayer = player.name
+                end
+            end
+            -- Spieler ohne Koordinaten werden ignoriert (kein Fallback)
+        end
+    end
+
+    return nearestPlayer
+end
+
 -- Spieler erfassen und tracken
 local function trackPlayers()
     local detected = getPlayersFromDetector()
@@ -484,11 +570,41 @@ local function trackPlayers()
     end
 
     lastSeenPlayers = newSeenPlayers
-    savePlayerStats()
+
+    -- Isolate persistence errors so logic bugs still surface via safeMain
+    safeSavePlayerStats("trackPlayers")
+
+    -- Aktualisiere currentPlayer nur wenn ein gültiger Spieler gefunden wurde
+    -- (verhindert, dass currentPlayer mid-game gelöscht wird)
+    -- Verwende bereits ermittelte Detector-Daten um Doppelabfrage zu vermeiden
+    local nearestPlayer = getNearestPlayer(detected)
+    if nearestPlayer then
+        currentPlayer = nearestPlayer
+    end
 end
 
 -- Spiel-Statistik aktualisieren
 local function updateGameStats(playerName, wager, won, payout)
+    -- Validierung der Parameter
+    if not playerName or type(playerName) ~= "string" or playerName == "" then
+        print("[FEHLER] updateGameStats: Ungültiger Spielername")
+        return
+    end
+
+    wager = tonumber(wager) or 0
+    payout = tonumber(payout) or 0
+
+    if wager < 0 then
+        print("[FEHLER] updateGameStats: Negativer Einsatz: "..wager)
+        wager = 0
+    end
+
+    if payout < 0 then
+        print("[FEHLER] updateGameStats: Negativer Payout: "..payout)
+        payout = 0
+    end
+
+    -- Update stats logic (let logic bugs fail via safeMain)
     local stats = getOrCreatePlayerStats(playerName)
     stats.gamesPlayed = stats.gamesPlayed + 1
     stats.totalWagered = stats.totalWagered + wager
@@ -526,7 +642,8 @@ local function updateGameStats(playerName, wager, won, payout)
         end
     end
 
-    savePlayerStats()
+    -- Isolate persistence errors so logic bugs still surface via safeMain
+    safeSavePlayerStats("updateGameStats")
 end
 
 -- Formatiere Zeit
@@ -551,35 +668,22 @@ loadPlayerStats()
 
 -- Diamanten im Netzwerk zählen (Casino-Bank-Reserve)
 local function getItemCountInNet(name)
+    if not bridge then
+        print("[FEHLER] getItemCountInNet: Bridge nicht verfügbar!")
+        return 0
+    end
+
     local ok, res = pcall(bridge.getItem, { name = name })
     if not ok or not res then return 0 end
     return res.amount or res.count or 0
 end
 
 -- Diamanten in IO-Chest zählen (Spieler-Guthaben)
--- nutzt RS-/ME-bridge listItems(Direction)
--- Diamanten in IO-Chest zählen (Spieler-Guthaben)
--- 1) zuerst über die Bridge (Chest an RS/ME)
--- 2) falls das nichts liefert, direkt die Chest als Peripherie auslesen
+-- Die IO-Chest muss direkt am Computer angeschlossen sein (nicht über Bridge!)
+-- HINWEIS: bridge.listItems() listet das GESAMTE ME-System, nicht eine einzelne Chest
+-- Daher lesen wir die Chest direkt als Peripherie aus
 local function getPlayerBalance()
-    -- 1. Versuch: über die Bridge (Chest ist an der Bridge auf IO_CHEST_DIR angeschlossen)
-    if bridge and bridge.listItems then
-        local ok, items = pcall(bridge.listItems, IO_CHEST_DIR)
-        if ok and type(items) == "table" then
-            local total = 0
-            -- pairs statt ipairs, falls die Bridge eine Map zurückgibt
-            for _, item in pairs(items) do
-                if item.name == DIAMOND_ID then
-                    total = total + (item.count or item.amount or 0)
-                end
-            end
-            if total > 0 then
-                return total
-            end
-        end
-    end
-
-    -- 2. Versuch: Chest direkt vor dem Computer auslesen
+    -- Chest direkt vom Computer auslesen
     -- IO_CHEST_DIR = Seite vom Computer aus (z.B. "front")
     local chest = peripheral.wrap(IO_CHEST_DIR)
     if chest and chest.list then
@@ -587,12 +691,18 @@ local function getPlayerBalance()
         local ok, list = pcall(chest.list)
         if ok and type(list) == "table" then
             for _, stack in pairs(list) do
-                if stack.name == DIAMOND_ID then
+                if stack and stack.name == DIAMOND_ID then
                     total = total + (stack.count or 0)
                 end
             end
+        else
+            if not ok then
+                print("[WARNUNG] getPlayerBalance chest.list() Fehler: "..tostring(list))
+            end
         end
         return total
+    else
+        print("[WARNUNG] getPlayerBalance: Keine Chest auf '"..IO_CHEST_DIR.."' gefunden")
     end
 
     -- Wenn alles schief geht: 0
@@ -605,18 +715,23 @@ local function takeStake(amount)
     amount = tonumber(amount) or 0
     if amount <= 0 then return 0 end
 
+    if not bridge then
+        print("[FEHLER] takeStake: Bridge nicht verfügbar!")
+        return 0
+    end
+
     print(("[EINSATZ] Nehme %d Diamanten aus IO-Chest '%s'"):format(amount, IO_CHEST_DIR))
-    
+
     local ok, imported = pcall(bridge.importItem,
         { name = DIAMOND_ID, count = amount },
         IO_CHEST_DIR
     )
-    
+
     if not ok then
         print("[FEHLER] importItem:", imported)
         return 0
     end
-    
+
     local result = imported or 0
     print("[EINSATZ] Genommen:", result)
     return result
@@ -636,6 +751,11 @@ local MAX_EXPORT_CHUNK = 4096   -- kannst du bei Bedarf anpassen
 local function rawExportDiamonds(amount)
     amount = tonumber(amount) or 0
     if amount <= 0 then return 0 end
+
+    if not bridge then
+        print("[FEHLER] rawExportDiamonds: Bridge nicht verfügbar!")
+        return 0
+    end
 
     print(("[GEWINN-RAW] Versuche %d Diamanten nach '%s' zu exportieren"):format(amount, IO_CHEST_DIR))
 
@@ -728,6 +848,7 @@ end
 ------------- GLOBAL STATE -------------
 
 local mode = "menu"
+local currentPlayer = nil  -- Der Spieler, der gerade am Terminal spielt
 
 -- Admin
 local ADMIN_PIN = "1234"
@@ -739,20 +860,24 @@ local currentStatsOffset = 0  -- Fuer Pagination der Spieler-Statistiken
 local r_state = "type"
 local r_betType, r_choice, r_stake = nil, nil, 0
 local r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
+local r_player = nil  -- Spieler der dieses Spiel gestartet hat
 
 -- Coinflip
 local c_state, c_stake, c_choice = "stake", 0, nil
 local c_lastWin, c_lastPayout, c_lastSide = false, 0, nil
+local c_player = nil  -- Spieler der dieses Spiel gestartet hat
 
 -- High/Low
 local h_state, h_stake = "stake", 0
 local h_startNum, h_nextNum, h_choice = nil, nil, nil
 local h_lastWin, h_lastPayout, h_lastPush = false, 0, false
+local h_player = nil  -- Spieler der dieses Spiel gestartet hat
 
 -- Blackjack
 local bj_state, bj_stake = "stake", 0
 local bj_playerHand, bj_dealerHand, bj_deck = {}, {}, {}
 local bj_lastWin, bj_lastPayout, bj_lastResult = false, 0, ""
+local bj_player = nil  -- Spieler der dieses Spiel gestartet hat
 
 -- Slots
 local s_state, s_bet = "setup", 1
@@ -760,6 +885,7 @@ local s_grid = {{},{},{}}
 local s_lastWin, s_lastMult, s_lastPayout = false, 0, 0
 local s_freeSpins, s_totalWin, s_winLines = 0, 0, {}
 local s_freeSpinBet = 0  -- merkt sich Einsatz, mit dem Freispiele erspielt wurden
+local s_player = nil  -- Spieler der dieses Spiel gestartet hat
 
 local slotSymbols = {
     {sym="7",   weight=1,  name="Lucky 7"},
@@ -1044,67 +1170,90 @@ local function drawPlayerStatsDetail(playerName)
         end
     end
 
-    drawChrome("Spieler: "..playerName,"Detaillierte Statistiken")
+    drawChrome("Spieler-Profil","Detaillierte Statistiken")
 
-    drawBox(4,4,mw-3,mh-5,COLOR_PANEL_DARK)
+    -- Header Box mit Spielername
+    drawBox(4,4,mw-3,7,isOnline and colors.cyan or COLOR_PANEL)
+    drawBorder(4,4,mw-3,7,COLOR_GOLD)
 
     local y = 5
-    local nameLabel = playerName .. (isOnline and " [ONLINE]" or "")
-    mcenter(y, "=== " .. nameLabel .. " ===", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
+    local nameLabel = playerName
+    mcenter(y, nameLabel, colors.white, isOnline and colors.cyan or COLOR_PANEL); y = y + 1
+
+    local statusLabel = isOnline and "[ONLINE]" or "OFFLINE"
+    local statusColor = isOnline and colors.lime or colors.lightGray
+    mcenter(y, statusLabel, statusColor, isOnline and colors.cyan or COLOR_PANEL); y = y + 1
 
     -- Zeige "Zuletzt gesehen" wenn nicht online
     if not isOnline then
         if stats.lastSeen and type(stats.lastSeen) == "number" then
             local timeSince = os.epoch("utc") - stats.lastSeen
             local lastSeenStr = formatTime(timeSince) .. " her"
-            mcenter(y, "Zuletzt: " .. lastSeenStr, colors.lightGray, COLOR_PANEL_DARK)
+            mcenter(y, "Zuletzt: " .. lastSeenStr, colors.lightGray, isOnline and colors.cyan or COLOR_PANEL)
         else
-            mcenter(y, "Zuletzt: unbekannt", colors.lightGray, COLOR_PANEL_DARK)
+            mcenter(y, "Zuletzt: unbekannt", colors.lightGray, isOnline and colors.cyan or COLOR_PANEL)
         end
     end
+
+    -- Statistik Box
+    y = 9
+    drawBox(4,y,mw-3,mh-5,COLOR_PANEL_DARK)
     y = y + 1
 
-    mwrite(6,y,"Besuche:",colors.lightGray,COLOR_PANEL_DARK)
+    -- Aktivitäts-Statistiken
+    mcenter(y, "--- AKTIVITAET ---", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
+
+    mwrite(6,y,"# Besuche:",colors.lightGray,COLOR_PANEL_DARK)
     mwrite(mw-15,y,tostring(stats.totalVisits),colors.white,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"Zeit:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,formatTime(stats.totalTimeSpent),colors.white,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,"# Spielzeit:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,formatTime(stats.totalTimeSpent),COLOR_INFO,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"Spiele:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(6,y,"# Spiele:",colors.lightGray,COLOR_PANEL_DARK)
     mwrite(mw-15,y,tostring(stats.gamesPlayed),colors.white,COLOR_PANEL_DARK); y = y + 2
 
-    mwrite(6,y,"Gesetzt:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.totalWagered.." Dia",COLOR_INFO,COLOR_PANEL_DARK); y = y + 1
+    -- Finanz-Statistiken
+    mcenter(y, "--- FINANZEN ---", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
+
+    mwrite(6,y,"$ Gesetzt:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.totalWagered.." Dia",colors.orange,COLOR_PANEL_DARK); y = y + 1
 
     local netProfit = stats.totalWon - stats.totalLost
     local profitColor = netProfit >= 0 and COLOR_SUCCESS or COLOR_WARNING
-    mwrite(6,y,"Netto:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(6,y,"$ Netto:",colors.lightGray,COLOR_PANEL_DARK)
     local netText = netProfit >= 0 and "+"..netProfit or tostring(netProfit)
-    mwrite(mw-15,y,netText.." Dia",profitColor,COLOR_PANEL_DARK); y = y + 2
+    mwrite(mw-15,y,netText.." Dia",profitColor,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"Groesster Gewinn:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.biggestWin.." Dia",COLOR_SUCCESS,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,"$ Top Gewinn:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,"+"..stats.biggestWin.." Dia",colors.lime,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"Groesster Verlust:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.biggestLoss.." Dia",COLOR_WARNING,COLOR_PANEL_DARK); y = y + 2
+    mwrite(6,y,"$ Top Verlust:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,"-"..stats.biggestLoss.." Dia",colors.red,COLOR_PANEL_DARK); y = y + 2
+
+    -- Streak-Statistiken
+    mcenter(y, "--- SERIEN ---", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
 
     local streakText = ""
     local streakColor = colors.white
+    local streakIcon = ""
     if stats.currentStreak > 0 then
         streakText = "+"..stats.currentStreak.." Siege"
-        streakColor = COLOR_SUCCESS
+        streakColor = colors.lime
+        streakIcon = "^ "
     elseif stats.currentStreak < 0 then
         streakText = math.abs(stats.currentStreak).." Niederlagen"
-        streakColor = COLOR_WARNING
+        streakColor = colors.red
+        streakIcon = "v "
     else
-        streakText = "Keine aktive Serie"
+        streakText = "Keine Serie"
         streakColor = colors.lightGray
+        streakIcon = "- "
     end
-    mwrite(6,y,"Aktuelle Serie:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-25,y,streakText,streakColor,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,streakIcon.."Aktuell:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-20,y,streakText,streakColor,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"Beste Serie:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.longestWinStreak.." Siege",colors.white,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,"^ Beste:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.longestWinStreak.." Siege",colors.lime,COLOR_PANEL_DARK); y = y + 1
 
     addButton("player_detail_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
 end
@@ -1573,6 +1722,9 @@ local function r_drawResult()
 end
 
 local function r_doSpin()
+  -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
+  r_player = currentPlayer
+
   local playerDia = getPlayerBalance()
   if playerDia < r_stake then
     mode="menu"; drawMainMenu(); return
@@ -1611,6 +1763,11 @@ local function r_doSpin()
     if checkPayoutLock() then return end
   else
     r_lastPayout = 0
+  end
+
+  -- Statistik erfassen (verwende r_player statt currentPlayer für korrekte Attribution)
+  if r_player then
+    updateGameStats(r_player, r_stake, hit, r_lastPayout)
   end
 
   sleep(0.5)
@@ -1670,7 +1827,7 @@ local function handleRouletteButton(id)
     end
 
   elseif r_state=="result" then
-    if id=="r_again" then r_state="type"; r_drawChooseType()
+    if id=="r_again" then r_state="type"; r_player = nil; r_drawChooseType()
     elseif id=="back_menu" then mode="menu"; drawMainMenu() end
   end
 end
@@ -1751,14 +1908,17 @@ local function c_drawResult()
 end
 
 local function c_doFlip()
+  -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
+  c_player = currentPlayer
+
   local playerDia = getPlayerBalance()
-  if playerDia < c_stake then 
-    mode="menu"; drawMainMenu(); return 
+  if playerDia < c_stake then
+    mode="menu"; drawMainMenu(); return
   end
-  
+
   local taken = takeStake(c_stake)
-  if taken < c_stake then 
-    mode="menu"; drawMainMenu(); return 
+  if taken < c_stake then
+    mode="menu"; drawMainMenu(); return
   end
 
   clearButtons()
@@ -1785,6 +1945,11 @@ local function c_doFlip()
     c_lastPayout = 0
   end
 
+  -- Statistik erfassen (verwende c_player statt currentPlayer für korrekte Attribution)
+  if c_player then
+    updateGameStats(c_player, c_stake, c_lastWin, c_lastPayout)
+  end
+
   sleep(0.5)
   c_state="result"
   c_drawResult()
@@ -1803,7 +1968,7 @@ local function handleCoinButton(id)
     elseif id=="back_c_stake" then c_state="stake"; c_drawStake() end
 
   elseif c_state=="result" then
-    if id=="c_again" then c_state="stake"; c_drawStake()
+    if id=="c_again" then c_state="stake"; c_player = nil; c_drawStake()
     elseif id=="back_menu" then mode="menu"; drawMainMenu() end
   end
 end
@@ -1896,14 +2061,17 @@ local function h_drawResult()
 end
 
 local function h_doRound()
+  -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
+  h_player = currentPlayer
+
   local playerDia = getPlayerBalance()
-  if playerDia < h_stake then 
-    mode="menu"; drawMainMenu(); return 
+  if playerDia < h_stake then
+    mode="menu"; drawMainMenu(); return
   end
-  
+
   local taken = takeStake(h_stake)
-  if taken < h_stake then 
-    mode="menu"; drawMainMenu(); return 
+  if taken < h_stake then
+    mode="menu"; drawMainMenu(); return
   end
 
   -- Startzahl NICHT neu ziehen, nur die neue Zahl:
@@ -1928,6 +2096,11 @@ local function h_doRound()
     h_lastWin=false; h_lastPayout=0; h_lastPush=false
   end
 
+  -- Statistik erfassen (verwende h_player statt currentPlayer für korrekte Attribution)
+  if h_player then
+    updateGameStats(h_player, h_stake, h_lastWin, h_lastPayout)
+  end
+
   h_state="result"
   h_drawResult()
 end
@@ -1949,7 +2122,7 @@ local function handleHiloButton(id)
     elseif id=="back_h_stake" then h_state="stake"; h_drawStake() end
 
   elseif h_state=="result" then
-    if id=="h_again" then h_state="stake"; h_drawStake()
+    if id=="h_again" then h_state="stake"; h_player = nil; h_drawStake()
     elseif id=="back_menu" then mode="menu"; drawMainMenu() end
   end
 end
@@ -2188,17 +2361,25 @@ local function bj_dealerPlay()
   else
     bj_lastResult = "lose"
   end
-  
+
+  -- Statistik erfassen (verwende bj_player statt currentPlayer für korrekte Attribution)
+  if bj_player then
+    updateGameStats(bj_player, bj_stake, bj_lastWin, bj_lastPayout)
+  end
+
   bj_state = "result"
   bj_drawResult()
 end
 
 local function bj_startGame()
+  -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
+  bj_player = currentPlayer
+
   local playerDia = getPlayerBalance()
   if playerDia < bj_stake then
     mode="menu"; drawMainMenu(); return
   end
-  
+
   local taken = takeStake(bj_stake)
   if taken < bj_stake then
     mode="menu"; drawMainMenu(); return
@@ -2260,6 +2441,7 @@ local function handleBlackjackButton(id)
   elseif bj_state == "result" then
     if id=="bj_again" then
       bj_state = "stake"
+      bj_player = nil
       bj_drawStake()
     elseif id=="back_menu" then
       mode="menu"; drawMainMenu()
@@ -2465,6 +2647,11 @@ local function s_drawScreen()
 end
 
 local function s_doSpin()
+  -- Erfasse den Spieler beim ersten echten Spin (nicht bei Freispielen)
+  if s_freeSpins == 0 then
+    s_player = currentPlayer
+  end
+
   local playerDia = getPlayerBalance()
   local isFreeSpin = (s_freeSpins > 0)
   local cost = isFreeSpin and 0 or s_bet
@@ -2573,9 +2760,15 @@ local function s_doSpin()
     s_lastPayout = 0
   end
 
+  -- Statistik erfassen (nur bei echten Spins, nicht bei Freispielen)
+  -- Verwende s_player statt currentPlayer für korrekte Attribution
+  if s_player and cost > 0 then
+    updateGameStats(s_player, cost, s_lastWin, s_lastPayout)
+  end
+
   s_state="result"
   s_drawScreen()
-  
+
   if s_freeSpins > 0 then
     sleep(2.5)
     s_doSpin()
@@ -2636,6 +2829,7 @@ local function drawRouletteSimple()
   r_state="type"
   r_betType, r_choice, r_stake = nil, nil, 0
   r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
+  r_player = nil  -- Reset player tracking
   r_drawChooseType()
 end
 
@@ -2644,6 +2838,7 @@ local function drawHiloSimple()
   h_stake = 0
   h_startNum, h_nextNum, h_choice = nil, nil, nil
   h_lastWin, h_lastPayout, h_lastPush = false, 0, false
+  h_player = nil  -- Reset player tracking
   h_drawStake()
 end
 
@@ -2652,6 +2847,7 @@ local function drawBlackjackSimple()
   bj_stake = 0
   bj_playerHand, bj_dealerHand, bj_deck = {}, {}, {}
   bj_lastWin, bj_lastPayout, bj_lastResult = false, 0, ""
+  bj_player = nil  -- Reset player tracking
   bj_drawStake()
 end
 
@@ -2662,6 +2858,7 @@ local function drawSlotsSimple()
   s_lastWin, s_lastMult, s_lastPayout = false, 0, 0
   s_freeSpins, s_totalWin, s_winLines = 0, 0, {}
   s_freeSpinBet = 0
+  s_player = nil  -- Reset player tracking
   s_drawScreen()
 end
 
@@ -2695,7 +2892,7 @@ local function handleButton(id)
         if id=="game_roulette" and gameStatus.roulette then
             mode="roulette"; drawRouletteSimple()
         elseif id=="game_coin" and gameStatus.coinflip then
-            mode="coin"; c_state="stake"; c_drawStake()
+            mode="coin"; c_state="stake"; c_player = nil; c_drawStake()
         elseif id=="game_hilo" and gameStatus.hilo then
             mode="hilo"; drawHiloSimple()
         elseif id=="game_blackjack" and gameStatus.blackjack then
@@ -2744,12 +2941,20 @@ local function safeMain()
         -- Tracking-Timer starten
         local trackingTimer = os.startTimer(2)
 
+        -- Peripheral-Namen für Event-Vergleich speichern (nur wenn verfügbar)
+        local monitorName = monitor and peripheral.getName(monitor) or nil
+        local bridgeName = bridge and peripheral.getName(bridge) or nil
+
         while true do
             local e, param1, x, y = os.pullEvent()
 
             if e == "monitor_touch" then
                 local side = param1
-                if side == peripheral.getName(monitor) then
+                -- Prüfe ob der Monitor noch existiert
+                if monitorName and (not monitor or not peripheral.isPresent(monitorName)) then
+                    error("Monitor wurde entfernt!")
+                end
+                if monitorName and side == monitorName then
                     local id = hitButton(x,y)
                     if id then handleButton(id) end
                 end
@@ -2757,14 +2962,33 @@ local function safeMain()
                 -- Spieler tracken alle 2 Sekunden
                 trackPlayers()
                 trackingTimer = os.startTimer(2)
+            elseif e == "peripheral_detach" then
+                -- Prüfe ob es der Monitor oder die Bridge war
+                if monitorName and param1 == monitorName then
+                    error("Monitor wurde entfernt!")
+                elseif bridgeName and param1 == bridgeName then
+                    error("Bridge wurde entfernt!")
+                end
             end
         end
     end)
-    
+
     if not success then
-        mclearRaw()
-        mcenter(math.floor(mh/2),"FEHLER: "..tostring(err),COLOR_WARNING)
-        mcenter(math.floor(mh/2)+2,"Neustart in 5 Sekunden...",colors.white)
+        -- Versuche Fehler auf Monitor anzuzeigen, falls noch verfügbar
+        local displaySuccess, displayErr = pcall(function()
+            local monName = monitor and peripheral.getName(monitor) or nil
+            if monName and peripheral.isPresent(monName) then
+                mclearRaw()
+                mcenter(math.floor(mh/2),"FEHLER: "..tostring(err),COLOR_WARNING)
+                mcenter(math.floor(mh/2)+2,"Neustart in 5 Sekunden...",colors.white)
+            end
+        end)
+
+        if not displaySuccess then
+            print("Kritischer Fehler: "..tostring(err))
+            print("Display-Fehler: "..tostring(displayErr))
+        end
+
         sleep(5)
         os.reboot()
     end
