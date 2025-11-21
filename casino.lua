@@ -417,6 +417,19 @@ local function addButton(id,x1,y1,x2,y2,label,fg,bg)
     end
 end
 
+-- Issue #14: Helper to deduplicate stake values while preserving order
+local function deduplicateStakes(values)
+    local seen = {}
+    local result = {}
+    for _, v in ipairs(values) do
+        if not seen[v] then
+            seen[v] = true
+            table.insert(result, v)
+        end
+    end
+    return result
+end
+
 local function hitButton(x,y)
     for _,b in ipairs(buttons) do
         if x>=b.x1 and x<=b.x2 and y>=b.y1 and y<=b.y2 then
@@ -728,13 +741,16 @@ local function trackPlayers()
 
     -- Aktualisiere currentPlayer nur wenn ein gültiger Spieler gefunden wurde
     -- (verhindert, dass currentPlayer mid-game gelöscht wird)
+    -- Issue #6: Don't change currentPlayer during active games
     -- Verwende bereits ermittelte Detector-Daten um Doppelabfrage zu vermeiden
     local nearestPlayer = getNearestPlayer(detected)
-    if nearestPlayer then
+    if nearestPlayer and not gameInProgress then
         if currentPlayer ~= nearestPlayer then
             print("[TRACKING] Neuer naechster Spieler: "..nearestPlayer.." (vorher: "..(currentPlayer or "keiner")..")")
         end
         currentPlayer = nearestPlayer
+    elseif nearestPlayer and gameInProgress then
+        print("[TRACKING] Spiel laeuft - behalte aktuellen Spieler: "..(currentPlayer or "Guest"))
     end
 end
 
@@ -1025,7 +1041,8 @@ local function payPayout(amount)
 
     if exported < amount then
         local notPaid = amount - exported
-        pendingPayout = (tonumber(pendingPayout) or 0) + notPaid
+        -- Issue #20: Simplified - pendingPayout is always a number, no need to sanitize mid-operation
+        pendingPayout = pendingPayout + notPaid
         payoutBlocked = true
         print("[WARNUNG] Nicht alles passte in die Kiste. Offen dazu: "..notPaid.." | Gesamt offen: "..pendingPayout)
     else
@@ -1041,6 +1058,7 @@ end
 -- App State (no longer using AppState table - Issue #18 fix)
 local mode = "menu"
 local currentPlayer = nil
+local gameInProgress = false  -- Issue #6: Lock currentPlayer during active games
 
 -- Admin State (grouped)
 local AdminState = {
@@ -1051,71 +1069,8 @@ local AdminState = {
 }
 
 -- Game State Variables (grouped to reduce local count)
-local GameState = {
-    -- Roulette
-    r = {
-        state = "type",
-        betType = nil,
-        choice = nil,
-        stake = 0,
-        lastResult = nil,
-        lastColor = nil,
-        lastHit = nil,
-        lastPayout = nil,
-        lastMult = nil,
-        player = nil
-    },
-    -- Coinflip
-    c = {
-        state = "stake",
-        stake = 0,
-        choice = nil,
-        lastWin = false,
-        lastPayout = 0,
-        lastSide = nil,
-        player = nil
-    },
-    -- High/Low
-    h = {
-        state = "stake",
-        stake = 0,
-        startNum = nil,
-        nextNum = nil,
-        choice = nil,
-        lastWin = false,
-        lastPayout = 0,
-        lastPush = false,
-        player = nil
-    },
-    -- Blackjack
-    bj = {
-        state = "stake",
-        stake = 0,
-        playerHand = {},
-        dealerHand = {},
-        deck = {},
-        lastWin = false,
-        lastPayout = 0,
-        lastResult = "",
-        player = nil
-    },
-    -- Slots
-    s = {
-        state = "setup",
-        bet = 1,
-        grid = {{},{},{}},
-        lastWin = false,
-        lastMult = 0,
-        lastPayout = 0,
-        freeSpins = 0,
-        totalWin = 0,
-        winLines = {},
-        freeSpinBet = 0,
-        player = nil
-    }
-}
-
--- Game state variables (Issue #19: These are the actual game variables, not aliases)
+-- Issue #4: Removed unused GameState table - was never accessed, just a structure template
+-- Game state variables (actual game state stored in these local variables)
 -- Roulette
 local r_state, r_betType, r_choice, r_stake = "type", nil, nil, 0
 local r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
@@ -1199,6 +1154,8 @@ end
 ----------- HAUPTMENÜ ------------------
 
 local function drawMainMenu()
+    gameInProgress = false  -- Issue #6: Unlock player tracking in menu
+
     -- Versuch, ausstehende Gewinne nachzuzahlen
     flushPendingPayoutIfPossible()
     if (pendingPayout or 0) > 0 then
@@ -1981,15 +1938,23 @@ local function r_drawChooseStake()
   local maxStake = playerDia
   mcenter(9,"Waehle deinen Einsatz:",colors.white)
 
+  -- Issue #14: Deduplicate stake buttons to prevent duplicates at low balance
   local quarter = math.max(1,math.floor(maxStake/4))
-  local bw = math.floor((mw-10)/4)
+  local stakeValues = deduplicateStakes({quarter, quarter*2, quarter*3, maxStake})
+
+  local bw = math.floor((mw-10)/#stakeValues)
   if bw<4 then bw=4 end
   local x=4
   local y=11
-  addButton("r_stake_"..quarter,     x,y,x+bw,y+2,tostring(quarter),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("r_stake_"..(quarter*2), x,y,x+bw,y+2,tostring(quarter*2),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("r_stake_"..(quarter*3), x,y,x+bw,y+2,tostring(quarter*3),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("r_stake_"..maxStake,    x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  for i, stake in ipairs(stakeValues) do
+    local isMax = (stake == maxStake)
+    local label = isMax and ("MAX\n"..tostring(stake)) or tostring(stake)
+    local bg = isMax and COLOR_HIGHLIGHT or COLOR_PANEL
+    local fg = isMax and colors.black or colors.white
+    addButton("r_stake_"..stake, x,y,x+bw,y+2, label, fg, bg)
+    x = x + bw + 1
+  end
 
   addButton("back_r_type",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
 end
@@ -2032,6 +1997,7 @@ end
 local function r_doSpin()
   -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
   r_player = currentPlayer
+  gameInProgress = true  -- Issue #6: Lock player tracking during game
 
   local playerDia = getPlayerBalance()
   if playerDia < r_stake then
@@ -2143,9 +2109,15 @@ end
 ------------- COINFLIP -----------------
 
 local function c_drawStake()
+  -- Issue #35: Safety check - ensure game is enabled
+  if not gameStatus.coinflip then
+    mode = "menu"
+    drawMainMenu()
+    return
+  end
   clearButtons()
   drawChrome("Muenzwurf","Setze deinen Einsatz")
-  
+
   local playerDia = getPlayerBalance()
   
   drawBox(5,4,mw-4,7,COLOR_PANEL_DARK)
@@ -2160,16 +2132,24 @@ local function c_drawStake()
 
   mcenter(9,"Gewinnchance: 50% | Gewinn: 2x Einsatz",COLOR_GOLD)
 
+  -- Issue #14: Deduplicate stake buttons to prevent duplicates at low balance
   local maxStake = playerDia
   local q = math.max(1,math.floor(maxStake/4))
-  local bw = math.floor((mw-10)/4)
+  local stakeValues = deduplicateStakes({q, q*2, q*3, maxStake})
+
+  local bw = math.floor((mw-10)/#stakeValues)
   if bw<4 then bw=4 end
   local x=4
   local y=11
-  addButton("c_stake_"..q,      x,y,x+bw,y+2,tostring(q),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("c_stake_"..(q*2),  x,y,x+bw,y+2,tostring(q*2),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("c_stake_"..(q*3),  x,y,x+bw,y+2,tostring(q*3),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("c_stake_"..maxStake,x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  for i, stake in ipairs(stakeValues) do
+    local isMax = (stake == maxStake)
+    local label = isMax and ("MAX\n"..tostring(stake)) or tostring(stake)
+    local bg = isMax and COLOR_HIGHLIGHT or COLOR_PANEL
+    local fg = isMax and colors.black or colors.white
+    addButton("c_stake_"..stake, x,y,x+bw,y+2, label, fg, bg)
+    x = x + bw + 1
+  end
 
   addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
 end
@@ -2218,6 +2198,7 @@ end
 local function c_doFlip()
   -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
   c_player = currentPlayer
+  gameInProgress = true  -- Issue #6: Lock player tracking during game
 
   local playerDia = getPlayerBalance()
   if playerDia < c_stake then
@@ -2302,16 +2283,24 @@ local function h_drawStake()
   mcenter(9,"Rate ob die naechste Zahl hoeher oder tiefer ist!",COLOR_GOLD)
   mcenter(10,"Push bei Gleichstand - Einsatz zurueck",colors.lightGray)
 
+  -- Issue #14: Deduplicate stake buttons to prevent duplicates at low balance
   local maxStake = playerDia
   local q = math.max(1,math.floor(maxStake/4))
-  local bw = math.floor((mw-10)/4)
+  local stakeValues = deduplicateStakes({q, q*2, q*3, maxStake})
+
+  local bw = math.floor((mw-10)/#stakeValues)
   if bw<4 then bw=4 end
   local x=4
   local y=12
-  addButton("h_stake_"..q,     x,y,x+bw,y+2,tostring(q),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("h_stake_"..(q*2), x,y,x+bw,y+2,tostring(q*2),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("h_stake_"..(q*3), x,y,x+bw,y+2,tostring(q*3),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("h_stake_"..maxStake,x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  for i, stake in ipairs(stakeValues) do
+    local isMax = (stake == maxStake)
+    local label = isMax and ("MAX\n"..tostring(stake)) or tostring(stake)
+    local bg = isMax and COLOR_HIGHLIGHT or COLOR_PANEL
+    local fg = isMax and colors.black or colors.white
+    addButton("h_stake_"..stake, x,y,x+bw,y+2, label, fg, bg)
+    x = x + bw + 1
+  end
 
   addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
 end
@@ -2371,6 +2360,7 @@ end
 local function h_doRound()
   -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
   h_player = currentPlayer
+  gameInProgress = true  -- Issue #6: Lock player tracking during game
 
   local playerDia = getPlayerBalance()
   if playerDia < h_stake then
@@ -2526,16 +2516,24 @@ local function bj_drawStake()
 
   mcenter(9,"Blackjack zahlt 3:2 | Gewinn: 1:1 | Push bei Gleichstand",COLOR_GOLD)
 
+  -- Issue #14: Deduplicate stake buttons to prevent duplicates at low balance
   local maxStake = playerDia
   local q = math.max(1,math.floor(maxStake/4))
-  local bw = math.floor((mw-10)/4)
+  local stakeValues = deduplicateStakes({q, q*2, q*3, maxStake})
+
+  local bw = math.floor((mw-10)/#stakeValues)
   if bw<4 then bw=4 end
   local x=4
   local y=11
-  addButton("bj_stake_"..q,     x,y,x+bw,y+2,tostring(q),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("bj_stake_"..(q*2), x,y,x+bw,y+2,tostring(q*2),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("bj_stake_"..(q*3), x,y,x+bw,y+2,tostring(q*3),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("bj_stake_"..maxStake,x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  for i, stake in ipairs(stakeValues) do
+    local isMax = (stake == maxStake)
+    local label = isMax and ("MAX\n"..tostring(stake)) or tostring(stake)
+    local bg = isMax and COLOR_HIGHLIGHT or COLOR_PANEL
+    local fg = isMax and colors.black or colors.white
+    addButton("bj_stake_"..stake, x,y,x+bw,y+2, label, fg, bg)
+    x = x + bw + 1
+  end
 
   addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
 end
@@ -2688,6 +2686,7 @@ end
 local function bj_startGame()
   -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
   bj_player = currentPlayer
+  gameInProgress = true  -- Issue #6: Lock player tracking during game
 
   local playerDia = getPlayerBalance()
   if playerDia < bj_stake then
@@ -2974,6 +2973,7 @@ local function s_doSpin()
   -- Erfasse den Spieler beim ersten echten Spin (nicht bei Freispielen)
   if s_freeSpins == 0 then
     s_player = currentPlayer
+    gameInProgress = true  -- Issue #6: Lock player tracking during game
   end
 
   -- Use while loop instead of recursion to prevent stack overflow
@@ -3155,6 +3155,12 @@ end
 ------------- SIMPLIFIED GAME STARTERS -------------
 
 local function drawRouletteSimple()
+  -- Issue #35: Safety check - ensure game is enabled
+  if not gameStatus.roulette then
+    mode = "menu"
+    drawMainMenu()
+    return
+  end
   r_state="type"
   r_betType, r_choice, r_stake = nil, nil, 0
   r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
@@ -3163,6 +3169,12 @@ local function drawRouletteSimple()
 end
 
 local function drawHiloSimple()
+  -- Issue #35: Safety check - ensure game is enabled
+  if not gameStatus.hilo then
+    mode = "menu"
+    drawMainMenu()
+    return
+  end
   h_state="stake"
   h_stake = 0
   h_startNum, h_nextNum, h_choice = nil, nil, nil
@@ -3172,6 +3184,12 @@ local function drawHiloSimple()
 end
 
 local function drawBlackjackSimple()
+  -- Issue #35: Safety check - ensure game is enabled
+  if not gameStatus.blackjack then
+    mode = "menu"
+    drawMainMenu()
+    return
+  end
   bj_state="stake"
   bj_stake = 0
   bj_playerHand, bj_dealerHand, bj_deck = {}, {}, {}
@@ -3181,6 +3199,12 @@ local function drawBlackjackSimple()
 end
 
 local function drawSlotsSimple()
+  -- Issue #35: Safety check - ensure game is enabled
+  if not gameStatus.slots then
+    mode = "menu"
+    drawMainMenu()
+    return
+  end
   s_state="setup"
   s_bet = 1
   s_grid = {{},{},{}}
@@ -3263,12 +3287,15 @@ end
 ------------- ERROR HANDLER -------------
 
 local function safeMain()
+    -- Issue #31: Make timer accessible for cleanup
+    local trackingTimer = nil
+
     local success, err = pcall(function()
         mode="menu"
         drawMainMenu()
 
         -- Tracking-Timer starten
-        local trackingTimer = os.startTimer(2)
+        trackingTimer = os.startTimer(2)
 
         -- Peripheral-Namen für Event-Vergleich speichern (nur wenn verfügbar)
         local monitorName = monitor and peripheral.getName(monitor) or nil
@@ -3303,6 +3330,20 @@ local function safeMain()
     end)
 
     if not success then
+        -- Issue #32: Cleanup on error before reboot
+        print("[ERROR] Kritischer Fehler aufgetreten: "..tostring(err))
+
+        -- Reset game lock to prevent stuck state
+        gameInProgress = false
+
+        -- Issue #31: Cancel tracking timer
+        if trackingTimer then
+            pcall(os.cancelTimer, trackingTimer)
+        end
+
+        -- Try to save player stats to prevent data loss
+        pcall(safeSavePlayerStats, "Error cleanup")
+
         -- Versuche Fehler auf Monitor anzuzeigen, falls noch verfügbar
         local displaySuccess, displayErr = pcall(function()
             local monName = monitor and peripheral.getName(monitor) or nil
