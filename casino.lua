@@ -420,6 +420,35 @@ local function getOrCreatePlayerStats(playerName)
     return playerStats[playerName]
 end
 
+-- Hole Spieler vom Detector (zentrale Helper-Funktion)
+-- Gibt {players = {...}, names = {...}} zurueck
+-- players: Array von Player-Objekten vom Detector
+-- names: Array von Spielernamen (String)
+local function getPlayersFromDetector()
+    if not playerDetector then
+        return {players = {}, names = {}}
+    end
+
+    local ok, playersInRange = pcall(playerDetector.getPlayersInRange, PLAYER_DETECTION_RANGE)
+    if not ok or not playersInRange then
+        return {players = {}, names = {}}
+    end
+
+    local names = {}
+    for _, player in ipairs(playersInRange) do
+        if player and player.name then
+            table.insert(names, player.name)
+        end
+    end
+
+    return {players = playersInRange, names = names}
+end
+
+-- Hole aktuell erkannte Spielernamen
+local function getCurrentPlayers()
+    return getPlayersFromDetector().names
+end
+
 -- Spieler erfassen und tracken
 local function trackPlayers()
     local detected = getPlayersFromDetector()
@@ -513,35 +542,6 @@ local function formatTime(milliseconds)
     else
         return string.format("%ds", seconds)
     end
-end
-
--- Hole Spieler vom Detector (zentrale Helper-Funktion)
--- Gibt {players = {...}, names = {...}} zurueck
--- players: Array von Player-Objekten vom Detector
--- names: Array von Spielernamen (String)
-local function getPlayersFromDetector()
-    if not playerDetector then
-        return {players = {}, names = {}}
-    end
-
-    local ok, playersInRange = pcall(playerDetector.getPlayersInRange, PLAYER_DETECTION_RANGE)
-    if not ok or not playersInRange then
-        return {players = {}, names = {}}
-    end
-
-    local names = {}
-    for _, player in ipairs(playersInRange) do
-        if player and player.name then
-            table.insert(names, player.name)
-        end
-    end
-
-    return {players = playersInRange, names = names}
-end
-
--- Hole aktuell erkannte Spielernamen
-local function getCurrentPlayers()
-    return getPlayersFromDetector().names
 end
 
 -- Statistiken laden beim Start
