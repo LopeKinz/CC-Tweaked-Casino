@@ -429,6 +429,14 @@ local function savePlayerStats()
     end
 end
 
+-- Helper: Sicher speichern mit einheitlichem Error-Handling
+local function safeSavePlayerStats(context)
+    local ok, err = pcall(savePlayerStats)
+    if not ok then
+        print("[FEHLER] " .. (context or "safeSavePlayerStats") .. ": Konnte Stats nicht speichern: " .. tostring(err))
+    end
+end
+
 -- Spieler-Statistik initialisieren oder abrufen
 local function getOrCreatePlayerStats(playerName)
     if not playerStats[playerName] then
@@ -548,13 +556,14 @@ local function trackPlayers()
     lastSeenPlayers = newSeenPlayers
 
     -- Isolate persistence errors so logic bugs still surface via safeMain
-    local ok, err = pcall(savePlayerStats)
-    if not ok then
-        print("[FEHLER] trackPlayers: Konnte Stats nicht speichern: " .. tostring(err))
-    end
+    safeSavePlayerStats("trackPlayers")
 
-    -- Aktualisiere currentPlayer mit dem nächsten Spieler
-    currentPlayer = getNearestPlayer()
+    -- Aktualisiere currentPlayer nur wenn ein gültiger Spieler gefunden wurde
+    -- (verhindert, dass currentPlayer mid-game gelöscht wird)
+    local nearestPlayer = getNearestPlayer()
+    if nearestPlayer then
+        currentPlayer = nearestPlayer
+    end
 end
 
 -- Spiel-Statistik aktualisieren
@@ -617,10 +626,7 @@ local function updateGameStats(playerName, wager, won, payout)
     end
 
     -- Isolate persistence errors so logic bugs still surface via safeMain
-    local ok, err = pcall(savePlayerStats)
-    if not ok then
-        print("[FEHLER] updateGameStats: Konnte Stats nicht speichern: " .. tostring(err))
-    end
+    safeSavePlayerStats("updateGameStats")
 end
 
 -- Formatiere Zeit
@@ -2890,9 +2896,9 @@ local function safeMain()
         -- Tracking-Timer starten
         local trackingTimer = os.startTimer(2)
 
-        -- Peripheral-Namen für Event-Vergleich speichern
-        local monitorName = peripheral.getName(monitor)
-        local bridgeName = peripheral.getName(bridge)
+        -- Peripheral-Namen für Event-Vergleich speichern (nur wenn verfügbar)
+        local monitorName = monitor and peripheral.getName(monitor) or nil
+        local bridgeName = bridge and peripheral.getName(bridge) or nil
 
         while true do
             local e, param1, x, y = os.pullEvent()
@@ -2900,10 +2906,10 @@ local function safeMain()
             if e == "monitor_touch" then
                 local side = param1
                 -- Prüfe ob der Monitor noch existiert
-                if not monitor or not peripheral.isPresent(monitorName) then
+                if monitorName and (not monitor or not peripheral.isPresent(monitorName)) then
                     error("Monitor wurde entfernt!")
                 end
-                if side == monitorName then
+                if monitorName and side == monitorName then
                     local id = hitButton(x,y)
                     if id then handleButton(id) end
                 end
@@ -2913,9 +2919,9 @@ local function safeMain()
                 trackingTimer = os.startTimer(2)
             elseif e == "peripheral_detach" then
                 -- Prüfe ob es der Monitor oder die Bridge war
-                if param1 == monitorName then
+                if monitorName and param1 == monitorName then
                     error("Monitor wurde entfernt!")
-                elseif param1 == bridgeName then
+                elseif bridgeName and param1 == bridgeName then
                     error("Bridge wurde entfernt!")
                 end
             end
@@ -2925,7 +2931,8 @@ local function safeMain()
     if not success then
         -- Versuche Fehler auf Monitor anzuzeigen, falls noch verfügbar
         local displaySuccess, displayErr = pcall(function()
-            if monitor and peripheral.isPresent(peripheral.getName(monitor)) then
+            local monName = monitor and peripheral.getName(monitor) or nil
+            if monName and peripheral.isPresent(monName) then
                 mclearRaw()
                 mcenter(math.floor(mh/2),"FEHLER: "..tostring(err),COLOR_WARNING)
                 mcenter(math.floor(mh/2)+2,"Neustart in 5 Sekunden...",colors.white)
