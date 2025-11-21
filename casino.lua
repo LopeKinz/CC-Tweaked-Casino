@@ -470,6 +470,8 @@ end
 local STATS_FILE = "player_stats.dat"
 local playerStats = {}
 local lastSeenPlayers = {}
+local statsNeedSave = false  -- Track if stats have been modified
+local lastStatsSaveTime = 0  -- Track last save time for periodic saves
 
 -- Statistik-Daten sanitieren (sicherstellen dass numerische Felder Zahlen sind)
 local function sanitizeStats(stats)
@@ -545,7 +547,7 @@ local function loadPlayerStats()
 
         print("[INFO] Erstelle neue leere Statistik-Datei")
         playerStats = {}
-        safeSavePlayerStats("loadPlayerStats")
+        safeSavePlayerStats("loadPlayerStats", true)  -- Force retry for initial save
     end
 end
 
@@ -561,12 +563,37 @@ local function savePlayerStats()
     file.close()
 end
 
--- Helper: Sicher speichern mit einheitlichem Error-Handling
-local function safeSavePlayerStats(context)
-    local ok, err = pcall(savePlayerStats)
-    if not ok then
-        print("[FEHLER] " .. (context or "safeSavePlayerStats") .. ": Konnte Stats nicht speichern: " .. tostring(err))
+-- Helper: Sicher speichern mit einheitlichem Error-Handling und Retry-Logik
+local function safeSavePlayerStats(context, forceRetry)
+    forceRetry = forceRetry or false
+    local maxRetries = forceRetry and 3 or 1  -- More retries for critical saves
+    local retryDelay = 0.1  -- 100ms between retries
+
+    for attempt = 1, maxRetries do
+        local ok, err = pcall(savePlayerStats)
+        if ok then
+            statsNeedSave = false
+            lastStatsSaveTime = os.epoch("utc")
+            if attempt > 1 then
+                print("[INFO] Stats erfolgreich gespeichert nach " .. attempt .. " Versuchen")
+            end
+            return true
+        else
+            local errMsg = "[FEHLER] " .. (context or "safeSavePlayerStats") .. " (Versuch " .. attempt .. "/" .. maxRetries .. "): " .. tostring(err)
+            print(errMsg)
+
+            if attempt < maxRetries then
+                sleep(retryDelay)
+                retryDelay = retryDelay * 2  -- Exponential backoff
+            else
+                print("[KRITISCH] Stats konnten NICHT gespeichert werden nach " .. maxRetries .. " Versuchen!")
+                -- Keep statsNeedSave = true so we can try again later
+                return false
+            end
+        end
     end
+
+    return false
 end
 
 -- Spieler-Statistik initialisieren oder abrufen
@@ -722,6 +749,7 @@ local function trackPlayers()
 
         local stats = getOrCreatePlayerStats(playerName)
         stats.lastSeen = currentTime
+        statsNeedSave = true  -- Mark stats as dirty
 
         if not lastSeenPlayers[playerName] then
             stats.totalVisits = stats.totalVisits + 1
@@ -744,13 +772,17 @@ local function trackPlayers()
             -- This fixes Guest and new player time tracking
             -- 2 seconds (timer is set to 2 seconds in main loop)
             stats.totalTimeSpent = stats.totalTimeSpent + 2000
+            statsNeedSave = true  -- Mark stats as dirty
         end
     end
 
     lastSeenPlayers = newSeenPlayers
 
-    -- Isolate persistence errors so logic bugs still surface via safeMain
-    safeSavePlayerStats("trackPlayers")
+    -- Periodic save: Only save every 30 seconds to reduce disk I/O
+    local timeSinceLastSave = currentTime - lastStatsSaveTime
+    if statsNeedSave and timeSinceLastSave >= 30000 then  -- 30 seconds
+        safeSavePlayerStats("trackPlayers_periodic", false)
+    end
 
     -- Aktualisiere currentPlayer nur wenn ein gültiger Spieler gefunden wurde
     -- (verhindert, dass currentPlayer mid-game gelöscht wird)
@@ -826,8 +858,9 @@ local function updateGameStats(playerName, wager, won, payout)
         end
     end
 
-    -- Isolate persistence errors so logic bugs still surface via safeMain
-    safeSavePlayerStats("updateGameStats")
+    -- Mark stats as dirty and save immediately with retry (critical save after game)
+    statsNeedSave = true
+    safeSavePlayerStats("updateGameStats", true)  -- Force retry for critical game stats
 end
 
 -- Formatiere Zeit
@@ -866,7 +899,7 @@ if not playerStats["Guest"] then
         longestWinStreak = 0,
         longestLoseStreak = 0
     }
-    safeSavePlayerStats("Guest initialization at startup")
+    safeSavePlayerStats("Guest initialization at startup", true)  -- Force retry for initial Guest save
 end
 
 ----------- INVENTAR / STORAGE ------------
