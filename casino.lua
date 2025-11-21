@@ -1,5 +1,17 @@
 -- casino.lua - CASINO LOUNGE (RS Bridge Support, Pending-Payout Lock)
--- Version 4.0 - Enhanced UI & Admin Game Management
+-- Version 4.1 - Player Stats Improvements & Code Refactoring
+--
+-- Changelog v4.1:
+-- + Centralized game configuration (GAME_CONFIG) for easier maintenance
+-- + Extracted helper function for disabled game buttons (reduces duplication)
+-- + Enhanced loadGameStatus() with proper validation and merging
+-- + Configurable player detection range (PLAYER_DETECTION_RANGE = 5 blocks)
+-- + Fixed Player Detector method check (now uses getPlayersInRange)
+-- + Added pagination to player stats list (was limited to 6, now unlimited)
+-- + Online/offline indicators for players in stats view
+-- + "Last seen" time display for offline players
+-- + Better navigation with preserved pagination state
+-- + Improved UI consistency across all screens
 --
 -- Changelog v4.0:
 -- + Admin can now activate/deactivate games
@@ -13,6 +25,7 @@
 
 local DIAMOND_ID = "minecraft:diamond"
 local IO_CHEST_DIR = "front"  -- Richtung der IO-Chest von der Bridge aus
+local PLAYER_DETECTION_RANGE = 5  -- Reichweite fuer Player Detector (in Bloecken)
 
 -- Bridge-Typen die wir suchen
 local BRIDGE_TYPES = { "meBridge", "me_bridge", "rsBridge", "rs_bridge" }
@@ -38,6 +51,50 @@ local COLOR_ACCENT      = colors.orange
 -- Game-Status Datei
 local GAME_STATUS_FILE = "game_status.dat"
 
+-- Zentrale Spiel-Konfiguration (Game IDs, Labels, Farben)
+local GAME_CONFIG = {
+    roulette = {
+        id = "roulette",
+        label = "ROULETTE",
+        mainButtonId = "game_roulette",
+        toggleButtonId = "toggle_roulette",
+        enabledColor = colors.red,
+        enabledFg = colors.white
+    },
+    slots = {
+        id = "slots",
+        label = "SLOTS",
+        mainButtonId = "game_slots",
+        toggleButtonId = "toggle_slots",
+        enabledColor = colors.purple,
+        enabledFg = colors.yellow
+    },
+    coinflip = {
+        id = "coinflip",
+        label = "MUENZWURF",
+        mainButtonId = "game_coin",
+        toggleButtonId = "toggle_coinflip",
+        enabledColor = colors.orange,
+        enabledFg = colors.white
+    },
+    hilo = {
+        id = "hilo",
+        label = "HIGH/LOW",
+        mainButtonId = "game_hilo",
+        toggleButtonId = "toggle_hilo",
+        enabledColor = colors.blue,
+        enabledFg = colors.white
+    },
+    blackjack = {
+        id = "blackjack",
+        label = "BLACKJACK",
+        mainButtonId = "game_blackjack",
+        toggleButtonId = "toggle_blackjack",
+        enabledColor = colors.black,
+        enabledFg = colors.yellow
+    }
+}
+
 -- Standard: Alle Spiele aktiv
 local gameStatus = {
     roulette = true,
@@ -47,7 +104,7 @@ local gameStatus = {
     blackjack = true
 }
 
--- Lade Game-Status aus Datei
+-- Lade Game-Status aus Datei (mit Validierung)
 local function loadGameStatus()
     local success, err = pcall(function()
         if fs.exists(GAME_STATUS_FILE) then
@@ -58,7 +115,13 @@ local function loadGameStatus()
                 if data and data ~= "" then
                     local decoded = textutils.unserialise(data)
                     if decoded and type(decoded) == "table" then
-                        gameStatus = decoded
+                        -- Merge loaded data into default structure with validation
+                        for gameId, _ in pairs(gameStatus) do
+                            if decoded[gameId] ~= nil then
+                                -- Coerce to boolean
+                                gameStatus[gameId] = decoded[gameId] and true or false
+                            end
+                        end
                         print("[INFO] Game-Status geladen")
                     else
                         print("[WARNUNG] Game-Status Datei korrupt, verwende Standard")
@@ -117,8 +180,9 @@ end
 
 -- Player Detector suchen (links vom Computer)
 local playerDetector = peripheral.wrap("left")
-if playerDetector and playerDetector.getOnlinePlayers then
+if playerDetector and playerDetector.getPlayersInRange then
     print("Player Detector gefunden: left")
+    print("Erkennungsreichweite: " .. PLAYER_DETECTION_RANGE .. " Bloecke")
 else
     print("WARNUNG: Kein Player Detector auf 'left' gefunden!")
     playerDetector = nil
@@ -179,6 +243,15 @@ local function drawBorder(x1,y1,x2,y2,color)
     monitor.setCursorPos(x2,y1); monitor.write("+")
     monitor.setCursorPos(x1,y2); monitor.write("+")
     monitor.setCursorPos(x2,y2); monitor.write("+")
+end
+
+-- Helper: Zeige ein deaktiviertes Spiel
+local function drawDisabledGameButton(x1, y1, x2, y2, label)
+    drawBox(x1, y1, x2, y2, COLOR_DISABLED)
+    local labelX = x1 + math.floor((x2 - x1 + 1 - #label) / 2)
+    local midY = y1 + math.floor((y2 - y1) / 2)
+    mwrite(labelX, midY, label, colors.gray, COLOR_DISABLED)
+    mwrite(labelX - 1, midY + 1, "[DEAKTIVIERT]", colors.gray, COLOR_DISABLED)
 end
 
 local function drawChrome(title, footer)
@@ -350,7 +423,7 @@ end
 local function trackPlayers()
     if not playerDetector then return end
 
-    local ok, playersInRange = pcall(playerDetector.getPlayersInRange, 10)
+    local ok, playersInRange = pcall(playerDetector.getPlayersInRange, PLAYER_DETECTION_RANGE)
     if not ok or not playersInRange then return end
 
     local currentTime = os.epoch("utc")
@@ -441,6 +514,21 @@ local function formatTime(milliseconds)
     else
         return string.format("%ds", seconds)
     end
+end
+
+-- Hole aktuell erkannte Spieler
+local function getCurrentPlayers()
+    if not playerDetector then return {} end
+    local ok, playersInRange = pcall(playerDetector.getPlayersInRange, PLAYER_DETECTION_RANGE)
+    if not ok or not playersInRange then return {} end
+
+    local names = {}
+    for _, player in ipairs(playersInRange) do
+        if player and player.name then
+            table.insert(names, player.name)
+        end
+    end
+    return names
 end
 
 -- Statistiken laden beim Start
@@ -632,6 +720,7 @@ local mode = "menu"
 local ADMIN_PIN = "1234"
 local admin_panel_open = false
 local admin_pin_input = ""
+local currentStatsOffset = 0  -- Fuer Pagination der Spieler-Statistiken
 
 -- Roulette
 local r_state = "type"
@@ -753,60 +842,45 @@ local function drawMainMenu()
     local startY = (playerDia == 0) and 14 or 12
 
     -- Row 1: Roulette & Slots
+    local rConfig = GAME_CONFIG.roulette
     if gameStatus.roulette then
-        addButton("game_roulette",3,startY,mid-1,startY+btnH,"ROULETTE",colors.white,colors.red)
+        addButton(rConfig.mainButtonId, 3, startY, mid-1, startY+btnH, rConfig.label, rConfig.enabledFg, rConfig.enabledColor)
     else
-        drawBox(3,startY,mid-1,startY+btnH,COLOR_DISABLED)
-        local label = "ROULETTE"
-        local labelX = 3 + math.floor((mid-1-3+1-#label)/2)
-        mwrite(labelX,startY+1,label,colors.gray,COLOR_DISABLED)
-        mwrite(labelX,startY+2,"[DEAKTIVIERT]",colors.gray,COLOR_DISABLED)
+        drawDisabledGameButton(3, startY, mid-1, startY+btnH, rConfig.label)
     end
 
+    local sConfig = GAME_CONFIG.slots
     if gameStatus.slots then
-        addButton("game_slots",mid+1,startY,mw-2,startY+btnH,"SLOTS",colors.yellow,colors.purple)
+        addButton(sConfig.mainButtonId, mid+1, startY, mw-2, startY+btnH, sConfig.label, sConfig.enabledFg, sConfig.enabledColor)
     else
-        drawBox(mid+1,startY,mw-2,startY+btnH,COLOR_DISABLED)
-        local label = "SLOTS"
-        local labelX = mid+1 + math.floor((mw-2-(mid+1)+1-#label)/2)
-        mwrite(labelX,startY+1,label,colors.gray,COLOR_DISABLED)
-        mwrite(labelX,startY+2,"[DEAKTIVIERT]",colors.gray,COLOR_DISABLED)
+        drawDisabledGameButton(mid+1, startY, mw-2, startY+btnH, sConfig.label)
     end
 
     startY = startY + btnH + gap + 1
 
     -- Row 2: Coinflip & High/Low
+    local cConfig = GAME_CONFIG.coinflip
     if gameStatus.coinflip then
-        addButton("game_coin",3,startY,mid-1,startY+btnH,"MUENZWURF",colors.white,colors.orange)
+        addButton(cConfig.mainButtonId, 3, startY, mid-1, startY+btnH, cConfig.label, cConfig.enabledFg, cConfig.enabledColor)
     else
-        drawBox(3,startY,mid-1,startY+btnH,COLOR_DISABLED)
-        local label = "MUENZWURF"
-        local labelX = 3 + math.floor((mid-1-3+1-#label)/2)
-        mwrite(labelX,startY+1,label,colors.gray,COLOR_DISABLED)
-        mwrite(labelX,startY+2,"[DEAKTIVIERT]",colors.gray,COLOR_DISABLED)
+        drawDisabledGameButton(3, startY, mid-1, startY+btnH, cConfig.label)
     end
 
+    local hConfig = GAME_CONFIG.hilo
     if gameStatus.hilo then
-        addButton("game_hilo",mid+1,startY,mw-2,startY+btnH,"HIGH/LOW",colors.white,colors.blue)
+        addButton(hConfig.mainButtonId, mid+1, startY, mw-2, startY+btnH, hConfig.label, hConfig.enabledFg, hConfig.enabledColor)
     else
-        drawBox(mid+1,startY,mw-2,startY+btnH,COLOR_DISABLED)
-        local label = "HIGH/LOW"
-        local labelX = mid+1 + math.floor((mw-2-(mid+1)+1-#label)/2)
-        mwrite(labelX,startY+1,label,colors.gray,COLOR_DISABLED)
-        mwrite(labelX,startY+2,"[DEAKTIVIERT]",colors.gray,COLOR_DISABLED)
+        drawDisabledGameButton(mid+1, startY, mw-2, startY+btnH, hConfig.label)
     end
 
     startY = startY + btnH + gap + 1
 
     -- Row 3: Blackjack
+    local bConfig = GAME_CONFIG.blackjack
     if gameStatus.blackjack then
-        addButton("game_blackjack",3,startY,mw-2,startY+btnH,"BLACKJACK",colors.yellow,colors.black)
+        addButton(bConfig.mainButtonId, 3, startY, mw-2, startY+btnH, bConfig.label, bConfig.enabledFg, bConfig.enabledColor)
     else
-        drawBox(3,startY,mw-2,startY+btnH,COLOR_DISABLED)
-        local label = "BLACKJACK"
-        local labelX = 3 + math.floor((mw-2-3+1-#label)/2)
-        mwrite(labelX,startY+1,label,colors.gray,COLOR_DISABLED)
-        mwrite(labelX,startY+2,"[DEAKTIVIERT]",colors.gray,COLOR_DISABLED)
+        drawDisabledGameButton(3, startY, mw-2, startY+btnH, bConfig.label)
     end
 
     addButton("admin_panel",mw-6,mh-2,mw-2,mh-1,"[A]",colors.gray,COLOR_BG)
@@ -861,6 +935,13 @@ local function drawPlayerStatsList(offset)
     clearButtons()
     drawChrome("Spieler-Statistiken","Alle erfassten Spieler")
 
+    -- Hole aktuell online Spieler
+    local currentPlayers = getCurrentPlayers()
+    local currentPlayersSet = {}
+    for _, name in ipairs(currentPlayers) do
+        currentPlayersSet[name] = true
+    end
+
     -- Spieler sortieren nach Gesamtzeit
     local sortedPlayers = {}
     for name, stats in pairs(playerStats) do
@@ -880,23 +961,31 @@ local function drawPlayerStatsList(offset)
         return
     end
 
+    local maxVisible = 6
+    local maxPages = math.ceil(totalPlayers / maxVisible)
+    local currentPage = math.floor(offset / maxVisible) + 1
+
     drawBox(4,4,mw-3,6,COLOR_PANEL_DARK)
-    mcenter(5,"Gesamt: "..totalPlayers.." Spieler",COLOR_GOLD,COLOR_PANEL_DARK)
+    mcenter(5,"Gesamt: "..totalPlayers.." Spieler (Seite "..currentPage.."/"..maxPages..")",COLOR_GOLD,COLOR_PANEL_DARK)
 
     local startY = 8
-    local maxVisible = math.min(6, totalPlayers)
+    local startIdx = offset + 1
+    local endIdx = math.min(startIdx + maxVisible - 1, totalPlayers)
 
-    for i = 1, maxVisible do
+    for i = startIdx, endIdx do
         local player = sortedPlayers[i]
         if player then
-            local btnY = startY + (i-1)*3
+            local btnY = startY + (i-startIdx)*3
             local stats = player.stats
             local timeStr = formatTime(stats.totalTimeSpent)
-            local winRate = stats.gamesPlayed > 0 and math.floor((stats.totalWon / (stats.totalWon + stats.totalLost)) * 100) or 0
 
-            local label = player.name.."\n"..stats.gamesPlayed.." Spiele | "..timeStr
+            -- Online-Indikator
+            local onlineMarker = currentPlayersSet[player.name] and "[ONLINE] " or ""
+            local label = onlineMarker..player.name.."\n"..stats.gamesPlayed.." Spiele | "..timeStr
             local btnColor = COLOR_PANEL
-            if stats.currentStreak > 0 then
+            if currentPlayersSet[player.name] then
+                btnColor = colors.cyan  -- Cyan fuer online Spieler
+            elseif stats.currentStreak > 0 then
                 btnColor = colors.green
             elseif stats.currentStreak < 0 then
                 btnColor = colors.red
@@ -904,6 +993,15 @@ local function drawPlayerStatsList(offset)
 
             addButton("stats_player_"..player.name, 4, btnY, mw-3, btnY+2, label, colors.white, btnColor)
         end
+    end
+
+    -- Pagination buttons
+    local btnY = mh - 6
+    if offset > 0 then
+        addButton("stats_prev",4,btnY,math.floor(mw/2)-1,btnY+1,"<< Vorherige",colors.white,COLOR_PANEL)
+    end
+    if endIdx < totalPlayers then
+        addButton("stats_next",math.floor(mw/2)+1,btnY,mw-3,btnY+1,"Naechste >>",colors.white,COLOR_PANEL)
     end
 
     addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
@@ -923,12 +1021,31 @@ local function drawPlayerStatsDetail(playerName)
         return
     end
 
+    -- Pruefe ob Spieler online ist
+    local currentPlayers = getCurrentPlayers()
+    local isOnline = false
+    for _, name in ipairs(currentPlayers) do
+        if name == playerName then
+            isOnline = true
+            break
+        end
+    end
+
     drawChrome("Spieler: "..playerName,"Detaillierte Statistiken")
 
     drawBox(4,4,mw-3,mh-5,COLOR_PANEL_DARK)
 
     local y = 5
-    mcenter(y,"=== "..playerName.." ===",COLOR_GOLD,COLOR_PANEL_DARK); y = y + 2
+    local nameLabel = playerName .. (isOnline and " [ONLINE]" or "")
+    mcenter(y, "=== " .. nameLabel .. " ===", COLOR_GOLD, COLOR_PANEL_DARK); y = y + 1
+
+    -- Zeige "Zuletzt gesehen" wenn nicht online
+    if not isOnline then
+        local timeSince = os.epoch("utc") - stats.lastSeen
+        local lastSeenStr = formatTime(timeSince) .. " her"
+        mcenter(y, "Zuletzt: " .. lastSeenStr, colors.lightGray, COLOR_PANEL_DARK)
+    end
+    y = y + 1
 
     mwrite(6,y,"Besuche:",colors.lightGray,COLOR_PANEL_DARK)
     mwrite(mw-15,y,tostring(stats.totalVisits),colors.white,COLOR_PANEL_DARK); y = y + 1
@@ -1029,38 +1146,43 @@ local function drawGameManagement()
     local mid = math.floor(mw/2)
 
     -- Roulette
-    local rouletteColor = gameStatus.roulette and colors.red or COLOR_DISABLED
-    local rouletteFg = gameStatus.roulette and colors.white or colors.gray
-    local rouletteLabel = "ROULETTE " .. (gameStatus.roulette and "[AN]" or "[AUS]")
-    addButton("toggle_roulette",4,btnY,mid-1,btnY+btnH,rouletteLabel,rouletteFg,rouletteColor)
+    local rConfig = GAME_CONFIG.roulette
+    local rColor = gameStatus.roulette and rConfig.enabledColor or COLOR_DISABLED
+    local rFg = gameStatus.roulette and rConfig.enabledFg or colors.gray
+    local rLabel = rConfig.label .. " " .. (gameStatus.roulette and "[AN]" or "[AUS]")
+    addButton(rConfig.toggleButtonId, 4, btnY, mid-1, btnY+btnH, rLabel, rFg, rColor)
 
     -- Slots
-    local slotsColor = gameStatus.slots and colors.purple or COLOR_DISABLED
-    local slotsFg = gameStatus.slots and colors.yellow or colors.gray
-    local slotsLabel = "SLOTS " .. (gameStatus.slots and "[AN]" or "[AUS]")
-    addButton("toggle_slots",mid+1,btnY,mw-3,btnY+btnH,slotsLabel,slotsFg,slotsColor)
+    local sConfig = GAME_CONFIG.slots
+    local sColor = gameStatus.slots and sConfig.enabledColor or COLOR_DISABLED
+    local sFg = gameStatus.slots and sConfig.enabledFg or colors.gray
+    local sLabel = sConfig.label .. " " .. (gameStatus.slots and "[AN]" or "[AUS]")
+    addButton(sConfig.toggleButtonId, mid+1, btnY, mw-3, btnY+btnH, sLabel, sFg, sColor)
 
     btnY = btnY + btnH + gap + 1
 
     -- Coinflip
-    local coinColor = gameStatus.coinflip and colors.orange or COLOR_DISABLED
-    local coinFg = gameStatus.coinflip and colors.white or colors.gray
-    local coinLabel = "MUENZWURF " .. (gameStatus.coinflip and "[AN]" or "[AUS]")
-    addButton("toggle_coinflip",4,btnY,mid-1,btnY+btnH,coinLabel,coinFg,coinColor)
+    local cConfig = GAME_CONFIG.coinflip
+    local cColor = gameStatus.coinflip and cConfig.enabledColor or COLOR_DISABLED
+    local cFg = gameStatus.coinflip and cConfig.enabledFg or colors.gray
+    local cLabel = cConfig.label .. " " .. (gameStatus.coinflip and "[AN]" or "[AUS]")
+    addButton(cConfig.toggleButtonId, 4, btnY, mid-1, btnY+btnH, cLabel, cFg, cColor)
 
     -- High/Low
-    local hiloColor = gameStatus.hilo and colors.blue or COLOR_DISABLED
-    local hiloFg = gameStatus.hilo and colors.white or colors.gray
-    local hiloLabel = "HIGH/LOW " .. (gameStatus.hilo and "[AN]" or "[AUS]")
-    addButton("toggle_hilo",mid+1,btnY,mw-3,btnY+btnH,hiloLabel,hiloFg,hiloColor)
+    local hConfig = GAME_CONFIG.hilo
+    local hColor = gameStatus.hilo and hConfig.enabledColor or COLOR_DISABLED
+    local hFg = gameStatus.hilo and hConfig.enabledFg or colors.gray
+    local hLabel = hConfig.label .. " " .. (gameStatus.hilo and "[AN]" or "[AUS]")
+    addButton(hConfig.toggleButtonId, mid+1, btnY, mw-3, btnY+btnH, hLabel, hFg, hColor)
 
     btnY = btnY + btnH + gap + 1
 
     -- Blackjack
-    local bjColor = gameStatus.blackjack and colors.black or COLOR_DISABLED
-    local bjFg = gameStatus.blackjack and colors.yellow or colors.gray
-    local bjLabel = "BLACKJACK " .. (gameStatus.blackjack and "[AN]" or "[AUS]")
-    addButton("toggle_blackjack",4,btnY,mw-3,btnY+btnH,bjLabel,bjFg,bjColor)
+    local bConfig = GAME_CONFIG.blackjack
+    local bColor = gameStatus.blackjack and bConfig.enabledColor or COLOR_DISABLED
+    local bFg = gameStatus.blackjack and bConfig.enabledFg or colors.gray
+    local bLabel = bConfig.label .. " " .. (gameStatus.blackjack and "[AN]" or "[AUS]")
+    addButton(bConfig.toggleButtonId, 4, btnY, mw-3, btnY+btnH, bLabel, bFg, bColor)
 
     -- Info message
     local activeCount = 0
@@ -1210,17 +1332,26 @@ local function handleAdminButton(id)
             drawAdminPanel()
 
         elseif id == "stats_players" then
-            drawPlayerStatsList(0)
+            currentStatsOffset = 0
+            drawPlayerStatsList(currentStatsOffset)
+
+        elseif id == "stats_prev" then
+            currentStatsOffset = math.max(0, (currentStatsOffset or 0) - 6)
+            drawPlayerStatsList(currentStatsOffset)
+
+        elseif id == "stats_next" then
+            currentStatsOffset = (currentStatsOffset or 0) + 6
+            drawPlayerStatsList(currentStatsOffset)
 
         elseif id:match("^stats_player_") then
             local playerName = id:match("^stats_player_(.+)$")
             drawPlayerStatsDetail(playerName)
 
         elseif id == "player_stats_list" then
-            drawPlayerStatsList(0)
+            drawPlayerStatsList(currentStatsOffset or 0)
 
         elseif id == "player_detail_back" then
-            drawPlayerStatsList(0)
+            drawPlayerStatsList(currentStatsOffset or 0)
 
         elseif id == "admin_games" then
             drawGameManagement()
