@@ -9,9 +9,10 @@ local IO_CHEST_DIR = "front"  -- Richtung der IO-Chest von der Bridge aus
 -- Bridge-Typen die wir suchen
 local BRIDGE_TYPES = { "meBridge", "me_bridge", "rsBridge", "rs_bridge" }
 
--- Farbschema
+-- Modernes Farbschema
 local COLOR_BG          = colors.black
 local COLOR_FRAME       = colors.gray
+local COLOR_FRAME_LIGHT = colors.lightGray
 local COLOR_HEADER_BG   = colors.purple
 local COLOR_HEADER_ACC  = colors.pink
 local COLOR_HEADER_TEXT = colors.white
@@ -19,11 +20,19 @@ local COLOR_FOOTER_BG   = colors.gray
 local COLOR_FOOTER_TEXT = colors.lightGray
 local COLOR_PANEL       = colors.gray
 local COLOR_PANEL_DARK  = colors.black
+local COLOR_PANEL_LIGHT = colors.lightGray
 local COLOR_HIGHLIGHT   = colors.lime
 local COLOR_WARNING     = colors.red
 local COLOR_INFO        = colors.cyan
 local COLOR_GOLD        = colors.yellow
 local COLOR_SUCCESS     = colors.green
+local COLOR_ORANGE      = colors.orange
+local COLOR_BLUE        = colors.blue
+local COLOR_MAGENTA     = colors.magenta
+
+-- UI-Konstanten
+local ANIM_SPEED = 0.05
+local SCROLL_SPEED = 3
 
 --------------- PERIPHERALS ------------
 
@@ -139,6 +148,124 @@ local function drawChrome(title, footer)
 
     monitor.setBackgroundColor(COLOR_BG)
     monitor.setTextColor(colors.white)
+end
+
+-- Fortschrittsbalken zeichnen
+local function drawProgressBar(x, y, width, percent, fgColor, bgColor, showPercent)
+    percent = math.max(0, math.min(100, percent))
+    local filledWidth = math.floor(width * (percent / 100))
+
+    -- Hintergrund
+    monitor.setBackgroundColor(bgColor or COLOR_PANEL_DARK)
+    monitor.setCursorPos(x, y)
+    monitor.write(string.rep(" ", width))
+
+    -- Gefüllter Teil
+    if filledWidth > 0 then
+        monitor.setBackgroundColor(fgColor or COLOR_SUCCESS)
+        monitor.setCursorPos(x, y)
+        monitor.write(string.rep(" ", filledWidth))
+    end
+
+    -- Prozent-Text
+    if showPercent then
+        local percentText = math.floor(percent).."%"
+        local textX = x + math.floor((width - #percentText) / 2)
+        monitor.setCursorPos(textX, y)
+        monitor.setTextColor(colors.white)
+        monitor.write(percentText)
+    end
+end
+
+-- Doppelte Border (3D-Effekt)
+local function drawDoubleBorder(x1, y1, x2, y2, color1, color2)
+    monitor.setTextColor(color1 or COLOR_FRAME)
+    for x = x1, x2 do
+        monitor.setCursorPos(x, y1)
+        monitor.write("=")
+        monitor.setCursorPos(x, y2)
+        monitor.write("=")
+    end
+    for y = y1, y2 do
+        monitor.setCursorPos(x1, y)
+        monitor.write("||")
+        monitor.setCursorPos(x2-1, y)
+        monitor.write("||")
+    end
+end
+
+-- Gradient-Effekt (vertikal)
+local function drawGradientBox(x1, y1, x2, y2, colorTop, colorBottom)
+    local height = y2 - y1 + 1
+    local halfHeight = math.floor(height / 2)
+
+    -- Obere Hälfte
+    monitor.setBackgroundColor(colorTop)
+    for y = y1, y1 + halfHeight - 1 do
+        monitor.setCursorPos(x1, y)
+        monitor.write(string.rep(" ", x2 - x1 + 1))
+    end
+
+    -- Untere Hälfte
+    monitor.setBackgroundColor(colorBottom)
+    for y = y1 + halfHeight, y2 do
+        monitor.setCursorPos(x1, y)
+        monitor.write(string.rep(" ", x2 - x1 + 1))
+    end
+end
+
+-- Animierter Text mit Welle-Effekt
+local function drawWaveText(y, text, baseColor)
+    local colors_list = {COLOR_GOLD, COLOR_ORANGE, colors.yellow, colors.white}
+    text = tostring(text)
+    local startX = math.floor((mw - #text) / 2) + 1
+
+    for i = 1, #text do
+        local char = text:sub(i, i)
+        local colorIndex = ((i - 1) % #colors_list) + 1
+        monitor.setCursorPos(startX + i - 1, y)
+        monitor.setTextColor(colors_list[colorIndex])
+        monitor.write(char)
+    end
+end
+
+-- Info-Badge (kleine Info-Box)
+local function drawBadge(x, y, text, bgColor, fgColor)
+    local width = #text + 2
+    monitor.setBackgroundColor(bgColor or COLOR_PANEL)
+    monitor.setTextColor(fgColor or colors.white)
+    monitor.setCursorPos(x, y)
+    monitor.write("[" .. text .. "]")
+end
+
+-- Live-Spieler-Anzeige
+local function drawLivePlayerCount()
+    if not playerDetector then return end
+
+    local ok, playersInRange = pcall(playerDetector.getPlayersInRange, 10)
+    if ok and playersInRange then
+        local count = #playersInRange
+        local text = count .. " Spieler"
+        local color = count > 0 and COLOR_SUCCESS or COLOR_FRAME
+        drawBadge(mw - #text - 4, mh, text, color, colors.white)
+    end
+end
+
+-- Separator-Linie mit Text
+local function drawSeparator(y, text, color)
+    monitor.setTextColor(color or COLOR_FRAME)
+    local lineWidth = math.floor((mw - #text - 4) / 2)
+
+    monitor.setCursorPos(2, y)
+    monitor.write(string.rep("-", lineWidth))
+
+    monitor.setCursorPos(2 + lineWidth + 1, y)
+    monitor.setTextColor(colors.white)
+    monitor.write(" " .. text .. " ")
+
+    monitor.setTextColor(color or COLOR_FRAME)
+    monitor.setCursorPos(2 + lineWidth + #text + 3, y)
+    monitor.write(string.rep("-", lineWidth))
 end
 
 -------------- BUTTONS -----------------
@@ -570,24 +697,34 @@ local winLines = {
 
 local function drawPendingPayoutScreen()
     clearButtons()
-    drawChrome("CASINO LOUNGE","Auszahlung ausstehend")
+    drawChrome("AUSZAHLUNG","Gewinn wartet auf dich!")
 
-    local x1, y1, x2, y2 = 4, 5, mw-3, mh-5
-    drawBox(x1,y1,x2,y2,COLOR_PANEL_DARK)
-    drawBorder(x1,y1,x2,y2,COLOR_WARNING)
+    -- Animiertes Warn-Banner
+    local x1, y1, x2, y2 = 3, 5, mw-2, 10
+    drawGradientBox(x1, y1, x2, y2, COLOR_WARNING, colors.orange)
+    drawDoubleBorder(x1, y1, x2, y2, colors.yellow, colors.white)
 
-    mcenter(y1+1,"AUSZAHLUNG AUSSTEHEND!",COLOR_WARNING,COLOR_PANEL_DARK)
-    mcenter(y1+3,"Es sind noch Gewinne offen:",COLOR_INFO,COLOR_PANEL_DARK)
-    mcenter(y1+4,tostring(pendingPayout).." Diamanten",COLOR_GOLD,COLOR_PANEL_DARK)
-    mcenter(y1+6,"Bitte leere die Chest vor dir",colors.white,COLOR_PANEL_DARK)
-    mcenter(y1+7,"und druecke 'Erneut pruefen'.",colors.white,COLOR_PANEL_DARK)
+    drawWaveText(7, "GEWINN OFFEN!")
+
+    monitor.setBackgroundColor(colors.orange)
+    mcenter(9, tostring(pendingPayout).." "..string.char(4).." Diamanten", colors.white, colors.orange)
+
+    -- Anweisungs-Box
+    drawBox(3, 12, mw-2, 18, COLOR_PANEL_DARK)
+    drawBorder(3, 12, mw-2, 18, COLOR_INFO)
+
+    mcenter(13, ">>> ANWEISUNGEN <<<", COLOR_INFO, COLOR_PANEL_DARK)
+    mcenter(15, "1. Leere die Chest vor dir", colors.white, COLOR_PANEL_DARK)
+    mcenter(16, "2. Druecke 'Erneut pruefen'", colors.white, COLOR_PANEL_DARK)
+    mcenter(17, "3. Erhalte deine Diamanten!", COLOR_SUCCESS, COLOR_PANEL_DARK)
 
     if payoutBlocked then
-        mcenter(y1+9,"(Kiste war zuvor voll)",colors.lightGray,COLOR_PANEL_DARK)
+        drawBadge(5, 20, "Chest war zuvor voll", COLOR_WARNING, colors.white)
     end
 
     local btnY = mh-3
-    addButton("pending_check",4,btnY,mw-3,btnY+1,"Erneut pruefen",colors.black,COLOR_HIGHLIGHT)
+    drawBox(3, btnY-1, mw-2, btnY+1, COLOR_HIGHLIGHT)
+    addButton("pending_check", 3, btnY, mw-2, btnY+1, ">>> ERNEUT PRUEFEN <<<", colors.black, COLOR_HIGHLIGHT)
     addButton("admin_panel",mw-6,2,mw-2,3,"[A]",colors.gray,COLOR_BG)
 end
 
@@ -618,41 +755,65 @@ local function drawMainMenu()
     local playerDia = getPlayerBalance()
     local bankDia = getItemCountInNet(DIAMOND_ID)
 
-    local x1,x2,y1,y2 = 4,mw-3,4,10
-    drawBox(x1,y1,x2,y2,COLOR_PANEL_DARK)
-    drawBorder(x1,y1,x2,y2,COLOR_FRAME)
-    
-    mcenter(5,"=== DEIN GUTHABEN ===",COLOR_GOLD,COLOR_PANEL_DARK)
-    mcenter(7,playerDia.." Diamanten",COLOR_SUCCESS,COLOR_PANEL_DARK)
-    mcenter(8,"(in Chest vor dir)",colors.lightGray,COLOR_PANEL_DARK)
-    
+    -- Guthaben-Box mit Gradient
+    local x1,x2,y1,y2 = 4,mw-3,4,11
+    drawGradientBox(x1,y1,x2,y2,COLOR_PANEL_DARK,COLOR_PANEL)
+    drawDoubleBorder(x1,y1,x2,y2,COLOR_GOLD,COLOR_ORANGE)
+
+    drawWaveText(6,"DEIN GUTHABEN")
+
+    -- Großer Betrag
+    monitor.setBackgroundColor(colors.black)
+    monitor.setTextColor(COLOR_SUCCESS)
+    local diamondText = tostring(playerDia).." "
+    local diamondX = math.floor((mw - #diamondText - 1) / 2) + 1
+    monitor.setCursorPos(diamondX, 8)
+    monitor.setTextColor(COLOR_GOLD)
+    monitor.write(string.char(4))  -- Diamant-Symbol
+    monitor.setTextColor(COLOR_SUCCESS)
+    monitor.write(" "..playerDia)
+
+    mcenter(9,"Diamanten",colors.lightGray,colors.black)
+
     if playerDia == 0 then
-        mcenter(11,"Lege Diamanten in die Chest!",COLOR_WARNING)
-        mcenter(12,"Richtung: "..IO_CHEST_DIR,colors.lightGray)
-    end
-    
-    if bankDia < 100 then
-        mcenter(mh-3,"[Admin] Casino-Bank niedrig: "..bankDia,colors.red)
+        drawBox(4,12,mw-3,14,COLOR_WARNING)
+        mcenter(13,"Lege Diamanten in die Chest!",colors.white,COLOR_WARNING)
     end
 
+    if bankDia < 100 then
+        drawBadge(4, mh-3, "ADMIN: Bank niedrig ("..bankDia..")", COLOR_WARNING, colors.white)
+    end
+
+    -- Spiele-Auswahl
     local btnH = 3
     local gap = 1
     local mid = math.floor(mw/2)
-    local startY = (playerDia == 0) and 14 or 12
-    
-    addButton("game_roulette",3,startY,mid-1,startY+btnH,"ROULETTE",colors.white,colors.red)
-    addButton("game_slots",   mid+1,startY,mw-2,startY+btnH,"SLOTS",colors.yellow,colors.purple)
-    
+    local startY = (playerDia == 0) and 16 or 13
+
+    -- Separator
+    drawSeparator(startY - 1, "SPIELE", COLOR_GOLD)
+
+    -- Buttons mit Gradienten
+    addButton("game_roulette",3,startY,mid-1,startY+btnH,"ROULETTE\n"+string.char(7),colors.white,colors.red)
+    addButton("game_slots",   mid+1,startY,mw-2,startY+btnH,"SLOTS\n$$$",colors.yellow,colors.purple)
+
     startY = startY + btnH + gap + 1
-    addButton("game_coin",    3,startY,mid-1,startY+btnH,"MUENZWURF",colors.white,colors.orange)
-    addButton("game_hilo",    mid+1,startY,mw-2,startY+btnH,"HIGH/LOW",colors.white,colors.blue)
-    
+    addButton("game_coin",    3,startY,mid-1,startY+btnH,"MUENZWURF\nO",colors.white,colors.orange)
+    addButton("game_hilo",    mid+1,startY,mw-2,startY+btnH,"HIGH/LOW\n^ v",colors.white,colors.blue)
+
     startY = startY + btnH + gap + 1
-    addButton("game_blackjack",3,startY,mw-2,startY+btnH,"BLACKJACK",colors.yellow,colors.black)
-    
-    addButton("admin_panel",mw-6,mh-2,mw-2,mh-1,"[A]",colors.gray,COLOR_BG)
-    
-    mcenter(mh-2,"Viel Glueck!",colors.lightGray)
+    addButton("game_blackjack",3,startY,mw-2,startY+btnH,"BLACKJACK - 21",colors.yellow,colors.black)
+
+    -- Admin-Button
+    addButton("admin_panel",mw-8,mh-2,mw-2,mh-1,"[ADMIN]",colors.orange,COLOR_PANEL_DARK)
+
+    -- Live-Spieler-Anzeige
+    drawLivePlayerCount()
+
+    -- Footer mit Effekt
+    monitor.setBackgroundColor(COLOR_FOOTER_BG)
+    monitor.setTextColor(COLOR_GOLD)
+    mcenter(mh-2,"~ Viel Glueck! ~",COLOR_GOLD,COLOR_FOOTER_BG)
 end
 
 ------------- ADMIN PANEL --------------
@@ -700,7 +861,7 @@ end
 -- Spieler-Statistiken Liste
 local function drawPlayerStatsList(offset)
     clearButtons()
-    drawChrome("Spieler-Statistiken","Alle erfassten Spieler")
+    drawChrome("SPIELER STATISTIKEN","Top Spieler nach Aktivitaet")
 
     -- Spieler sortieren nach Gesamtzeit
     local sortedPlayers = {}
@@ -714,17 +875,25 @@ local function drawPlayerStatsList(offset)
     local totalPlayers = #sortedPlayers
 
     if totalPlayers == 0 then
-        drawBox(4,5,mw-3,10,COLOR_PANEL_DARK)
-        mcenter(7,"Keine Spieler erfasst",colors.lightGray,COLOR_PANEL_DARK)
-        mcenter(8,"Stelle Player Detector auf",colors.lightGray,COLOR_PANEL_DARK)
-        addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
+        drawGradientBox(3,5,mw-2,12,COLOR_PANEL,COLOR_PANEL_DARK)
+        drawBorder(3,5,mw-2,12,COLOR_WARNING)
+        mcenter(7,"Keine Spieler erfasst",colors.lightGray,colors.black)
+        mcenter(9,"Player Detector muss",colors.white,colors.black)
+        mcenter(10,"installiert sein!",colors.white,colors.black)
+        addButton("player_stats_list",3,mh-4,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
         return
     end
 
-    drawBox(4,4,mw-3,6,COLOR_PANEL_DARK)
-    mcenter(5,"Gesamt: "..totalPlayers.." Spieler",COLOR_GOLD,COLOR_PANEL_DARK)
+    -- Header mit Total
+    drawGradientBox(3,4,mw-2,7,COLOR_MAGENTA,colors.purple)
+    drawBorder(3,4,mw-2,7,COLOR_FRAME_LIGHT)
+    mcenter(5,"TOTAL",colors.white,COLOR_MAGENTA)
+    monitor.setBackgroundColor(colors.purple)
+    mcenter(6,totalPlayers.." Spieler erfasst",colors.white,colors.purple)
 
-    local startY = 8
+    drawSeparator(9,"TOP SPIELER",COLOR_GOLD)
+
+    local startY = 11
     local maxVisible = math.min(6, totalPlayers)
 
     for i = 1, maxVisible do
@@ -733,21 +902,25 @@ local function drawPlayerStatsList(offset)
             local btnY = startY + (i-1)*3
             local stats = player.stats
             local timeStr = formatTime(stats.totalTimeSpent)
-            local winRate = stats.gamesPlayed > 0 and math.floor((stats.totalWon / (stats.totalWon + stats.totalLost)) * 100) or 0
 
-            local label = player.name.."\n"..stats.gamesPlayed.." Spiele | "..timeStr
+            -- Rank-Badge
+            local rankColor = (i==1 and COLOR_GOLD) or (i==2 and colors.lightGray) or (i==3 and colors.orange) or COLOR_INFO
+            local label = "#"..i.." "..player.name.."\n"..stats.gamesPlayed.." Spiele | "..timeStr
+
             local btnColor = COLOR_PANEL
+            local fgColor = colors.white
             if stats.currentStreak > 0 then
                 btnColor = colors.green
             elseif stats.currentStreak < 0 then
                 btnColor = colors.red
             end
 
-            addButton("stats_player_"..player.name, 4, btnY, mw-3, btnY+2, label, colors.white, btnColor)
+            -- Button mit Gradient-Effekt
+            addButton("stats_player_"..player.name, 3, btnY, mw-2, btnY+2, label, fgColor, btnColor)
         end
     end
 
-    addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
+    addButton("player_stats_list",3,mh-4,mw-2,mh-2,"<< Zurueck zum Admin Panel",colors.white,COLOR_PANEL)
 end
 
 -- Detail-Ansicht eines Spielers
@@ -764,92 +937,170 @@ local function drawPlayerStatsDetail(playerName)
         return
     end
 
-    drawChrome("Spieler: "..playerName,"Detaillierte Statistiken")
+    drawChrome("SPIELER PROFIL","Detaillierte Statistiken")
 
-    drawBox(4,4,mw-3,mh-5,COLOR_PANEL_DARK)
+    -- Header mit Spielername
+    drawGradientBox(3, 4, mw-2, 7, COLOR_MAGENTA, colors.purple)
+    drawDoubleBorder(3, 4, mw-2, 7, COLOR_GOLD, COLOR_ORANGE)
+    drawWaveText(6, playerName)
 
-    local y = 5
-    mcenter(y,"=== "..playerName.." ===",COLOR_GOLD,COLOR_PANEL_DARK); y = y + 2
+    -- Stats-Container
+    drawBox(3, 9, mw-2, mh-5, COLOR_PANEL_DARK)
+    drawBorder(3, 9, mw-2, mh-5, COLOR_FRAME_LIGHT)
 
-    mwrite(6,y,"Besuche:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,tostring(stats.totalVisits),colors.white,COLOR_PANEL_DARK); y = y + 1
+    local y = 10
 
-    mwrite(6,y,"Zeit:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,formatTime(stats.totalTimeSpent),colors.white,COLOR_PANEL_DARK); y = y + 1
+    -- Basis-Info
+    drawSeparator(y, "AKTIVITAET", COLOR_INFO)
+    y = y + 1
 
-    mwrite(6,y,"Spiele:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,tostring(stats.gamesPlayed),colors.white,COLOR_PANEL_DARK); y = y + 2
+    mwrite(5, y, "Besuche:", colors.lightGray, COLOR_PANEL_DARK)
+    drawBadge(mw-12, y, tostring(stats.totalVisits), COLOR_INFO, colors.white)
+    y = y + 1
 
-    mwrite(6,y,"Gesetzt:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.totalWagered.." Dia",COLOR_INFO,COLOR_PANEL_DARK); y = y + 1
+    mwrite(5, y, "Zeit:", colors.lightGray, COLOR_PANEL_DARK)
+    mwrite(mw-20, y, formatTime(stats.totalTimeSpent), colors.white, COLOR_PANEL_DARK)
+    y = y + 1
+
+    mwrite(5, y, "Spiele:", colors.lightGray, COLOR_PANEL_DARK)
+    drawBadge(mw-12, y, tostring(stats.gamesPlayed), COLOR_SUCCESS, colors.white)
+    y = y + 2
+
+    -- Finanz-Statistiken
+    drawSeparator(y, "FINANZEN", COLOR_GOLD)
+    y = y + 1
+
+    mwrite(5, y, "Gesetzt:", colors.lightGray, COLOR_PANEL_DARK)
+    mwrite(mw-20, y, stats.totalWagered.." "..string.char(4), COLOR_INFO, COLOR_PANEL_DARK)
+    y = y + 1
 
     local netProfit = stats.totalWon - stats.totalLost
     local profitColor = netProfit >= 0 and COLOR_SUCCESS or COLOR_WARNING
-    mwrite(6,y,"Netto:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(5, y, "Netto:", colors.lightGray, COLOR_PANEL_DARK)
     local netText = netProfit >= 0 and "+"..netProfit or tostring(netProfit)
-    mwrite(mw-15,y,netText.." Dia",profitColor,COLOR_PANEL_DARK); y = y + 2
+    mwrite(mw-20, y, netText.." "..string.char(4), profitColor, COLOR_PANEL_DARK)
+    y = y + 2
 
-    mwrite(6,y,"Groesster Gewinn:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.biggestWin.." Dia",COLOR_SUCCESS,COLOR_PANEL_DARK); y = y + 1
+    -- Win-Rate Progressbar
+    if stats.gamesPlayed > 0 then
+        local winRate = (stats.totalWon / (stats.totalWon + stats.totalLost)) * 100
+        mwrite(5, y, "Win-Rate:", colors.lightGray, COLOR_PANEL_DARK)
+        y = y + 1
+        drawProgressBar(5, y, mw-8, winRate, COLOR_SUCCESS, COLOR_PANEL_DARK, true)
+        y = y + 2
+    end
 
-    mwrite(6,y,"Groesster Verlust:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.biggestLoss.." Dia",COLOR_WARNING,COLOR_PANEL_DARK); y = y + 2
+    -- Rekorde
+    drawSeparator(y, "REKORDE", colors.orange)
+    y = y + 1
+
+    mwrite(5, y, "Groesster Gewinn:", COLOR_SUCCESS, COLOR_PANEL_DARK)
+    mwrite(mw-20, y, stats.biggestWin.." "..string.char(4), colors.white, COLOR_PANEL_DARK)
+    y = y + 1
+
+    mwrite(5, y, "Groesster Verlust:", COLOR_WARNING, COLOR_PANEL_DARK)
+    mwrite(mw-20, y, stats.biggestLoss.." "..string.char(4), colors.white, COLOR_PANEL_DARK)
+    y = y + 2
+
+    -- Streaks
+    drawSeparator(y, "SERIEN", COLOR_HIGHLIGHT)
+    y = y + 1
 
     local streakText = ""
     local streakColor = colors.white
+    local streakBg = COLOR_PANEL_DARK
     if stats.currentStreak > 0 then
         streakText = "+"..stats.currentStreak.." Siege"
-        streakColor = COLOR_SUCCESS
+        streakColor = colors.white
+        streakBg = COLOR_SUCCESS
     elseif stats.currentStreak < 0 then
         streakText = math.abs(stats.currentStreak).." Niederlagen"
-        streakColor = COLOR_WARNING
+        streakColor = colors.white
+        streakBg = COLOR_WARNING
     else
         streakText = "Keine aktive Serie"
         streakColor = colors.lightGray
     end
-    mwrite(6,y,"Aktuelle Serie:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-25,y,streakText,streakColor,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"Beste Serie:",colors.lightGray,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.longestWinStreak.." Siege",colors.white,COLOR_PANEL_DARK); y = y + 1
+    mwrite(5, y, "Aktuell:", colors.lightGray, COLOR_PANEL_DARK)
+    drawBadge(mw-30, y, streakText, streakBg, streakColor)
+    y = y + 1
 
-    addButton("player_detail_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
+    mwrite(5, y, "Beste Serie:", colors.lightGray, COLOR_PANEL_DARK)
+    mwrite(mw-20, y, stats.longestWinStreak.." Siege", COLOR_SUCCESS, COLOR_PANEL_DARK)
+
+    addButton("player_detail_back", 3, mh-4, mw-2, mh-2, "<< Zurueck zur Liste", colors.white, COLOR_PANEL)
 end
 
 local function drawAdminPanel()
     clearButtons()
-    drawChrome("Admin-Panel","Geschuetzter Bereich")
-    
+    drawChrome("ADMIN DASHBOARD","Geschuetzter Bereich")
+
     local playerDia = getPlayerBalance()
     local bankDia = getItemCountInNet(DIAMOND_ID)
-    
-    drawBox(4,4,mw-3,12,COLOR_PANEL_DARK)
-    drawBorder(4,4,mw-3,12,colors.orange)
-    
-    mcenter(5,"=== CASINO STATUS ===",colors.orange,COLOR_PANEL_DARK)
-    mcenter(7,"Spieler-Chest: "..playerDia.." Dia",COLOR_INFO,COLOR_PANEL_DARK)
-    mcenter(8,"Casino-Bank: "..bankDia.." Dia",COLOR_SUCCESS,COLOR_PANEL_DARK)
-    mcenter(10,"Monitor: "..mw.."x"..mh,colors.lightGray,COLOR_PANEL_DARK)
-    mcenter(11,"IO-Richtung: "..IO_CHEST_DIR,colors.lightGray,COLOR_PANEL_DARK)
+    local totalPlayers = 0
+    for _ in pairs(playerStats) do totalPlayers = totalPlayers + 1 end
 
+    -- Dashboard-Karten Layout
+    local mid = math.floor(mw / 2)
+
+    -- Karte 1: Spieler-Chest (links oben)
+    drawGradientBox(3, 4, mid-1, 8, COLOR_INFO, COLOR_BLUE)
+    drawBorder(3, 4, mid-1, 8, COLOR_FRAME_LIGHT)
+    mcenter(5, "SPIELER-CHEST", colors.white, COLOR_INFO)
+    monitor.setBackgroundColor(COLOR_BLUE)
+    mcenter(7, playerDia.." "..string.char(4), colors.white, COLOR_BLUE)
+
+    -- Karte 2: Casino-Bank (rechts oben)
+    local bankColor = bankDia >= 500 and COLOR_SUCCESS or (bankDia >= 100 and colors.orange or COLOR_WARNING)
+    drawGradientBox(mid+1, 4, mw-2, 8, bankColor, colors.green)
+    drawBorder(mid+1, 4, mw-2, 8, COLOR_FRAME_LIGHT)
+    mcenter(5, "CASINO-BANK", colors.white, bankColor)
+    monitor.setBackgroundColor(colors.green)
+    mcenter(7, bankDia.." "..string.char(4), colors.white, colors.green)
+
+    -- Karte 3: Spieler-Statistiken (links mitte)
+    drawGradientBox(3, 10, mid-1, 14, COLOR_MAGENTA, colors.purple)
+    drawBorder(3, 10, mid-1, 14, COLOR_FRAME_LIGHT)
+    mcenter(11, "SPIELER", colors.white, COLOR_MAGENTA)
+    monitor.setBackgroundColor(colors.purple)
+    mcenter(13, totalPlayers.." erfasst", colors.white, colors.purple)
+
+    -- Karte 4: System-Info (rechts mitte)
+    drawGradientBox(mid+1, 10, mw-2, 14, COLOR_PANEL, COLOR_PANEL_DARK)
+    drawBorder(mid+1, 10, mw-2, 14, COLOR_FRAME_LIGHT)
+    mcenter(11, "SYSTEM", colors.white, COLOR_PANEL)
+    monitor.setBackgroundColor(COLOR_PANEL_DARK)
+    mwrite(mid+3, 13, "Monitor: "..mw.."x"..mh, colors.lightGray, COLOR_PANEL_DARK)
+
+    -- Warnungen/Status
     if pendingPayout > 0 then
-        drawBox(4,14,mw-3,17,COLOR_WARNING)
-        mcenter(15,"Offene Gewinne: "..pendingPayout.." Dia",colors.white,COLOR_WARNING)
-        mcenter(16,"Kiste leeren & im Menue pruefen",colors.white,COLOR_WARNING)
+        drawBox(3, 16, mw-2, 19, COLOR_WARNING)
+        drawBorder(3, 16, mw-2, 19, colors.white)
+        mcenter(17, "OFFENE GEWINNE!", colors.white, COLOR_WARNING)
+        mcenter(18, pendingPayout.." Dia - Kiste leeren!", colors.white, COLOR_WARNING)
     elseif bankDia < 100 then
-        drawBox(4,14,mw-3,17,COLOR_WARNING)
-        mcenter(15,"WARNUNG!",colors.white,COLOR_WARNING)
-        mcenter(16,"Casino-Bank zu niedrig!",colors.white,COLOR_WARNING)
+        drawBox(3, 16, mw-2, 19, COLOR_WARNING)
+        drawBorder(3, 16, mw-2, 19, colors.white)
+        mcenter(17, "WARNUNG!", colors.white, COLOR_WARNING)
+        mcenter(18, "Casino-Bank zu niedrig!", colors.white, COLOR_WARNING)
+    else
+        drawBox(3, 16, mw-2, 18, COLOR_SUCCESS)
+        mcenter(17, string.char(4).." Alles bereit "..string.char(4), colors.white, COLOR_SUCCESS)
     end
-    
-    local btnY = 19
-    addButton("admin_collect",4,btnY,math.floor(mw/2)-1,btnY+2,"Chest leeren\n(Collect)",colors.black,colors.orange)
-    addButton("admin_refill",math.floor(mw/2)+1,btnY,mw-3,btnY+2,"Bank fuellen\n(Refill)",colors.black,colors.cyan)
-    
+
+    -- Action-Buttons
+    local btnY = 20
+    addButton("admin_collect",3,btnY,mid-1,btnY+2,"Chest leeren",colors.white,colors.orange)
+    addButton("admin_refill",mid+1,btnY,mw-2,btnY+2,"Bank fuellen",colors.white,colors.cyan)
+
     btnY = btnY + 4
-    addButton("admin_stats",4,btnY,mw-3,btnY+2,"Statistiken",colors.white,COLOR_PANEL)
-    
+    addButton("admin_stats",3,btnY,mw-2,btnY+2,"=== STATISTIKEN ANZEIGEN ===",colors.black,COLOR_GOLD)
+
     addButton("admin_close",3,mh-3,mw-2,mh-2,"<< Schliessen",colors.white,COLOR_WARNING)
+
+    -- Live-Spieler
+    drawLivePlayerCount()
 end
 
 local function handleAdminButton(id)
@@ -1156,37 +1407,58 @@ end
 
 local function r_drawResult()
   clearButtons()
-  drawChrome("Roulette - Ergebnis","")
+  drawChrome("ROULETTE ERGEBNIS","Das Rad hat gesprochen!")
 
   local cStr = (r_lastColor=="red" and "ROT")
            or (r_lastColor=="black" and "SCHWARZ")
            or "GRUEN"
 
-  local x1,x2,y1,y2 = 5,mw-4,4,9
+  -- Roulette-Rad-Anzeige mit Gradient
+  local x1,x2,y1,y2 = 4,mw-3,4,10
   local bg = (r_lastColor=="red" and colors.red)
           or (r_lastColor=="black" and COLOR_PANEL_DARK)
           or colors.green
-  drawBox(x1,y1,x2,y2,bg)
-  drawBorder(x1,y1,x2,y2,colors.white)
-  mcenter(5,"Zahl",colors.white,bg)
-  mcenter(7,tostring(r_lastResult),COLOR_GOLD,bg)
-  mcenter(8,"("..cStr..")",colors.white,bg)
+  local bg2 = (r_lastColor=="red" and colors.pink)
+           or (r_lastColor=="black" and colors.gray)
+           or COLOR_HIGHLIGHT
+
+  drawGradientBox(x1,y1,x2,y2,bg,bg2)
+  drawDoubleBorder(x1,y1,x2,y2,colors.yellow,colors.white)
+
+  monitor.setBackgroundColor(bg)
+  mcenter(6,"ZAHL",colors.white,bg)
+
+  -- Große Zahl in der Mitte
+  monitor.setBackgroundColor(bg2)
+  local numText = tostring(r_lastResult)
+  monitor.setCursorPos(math.floor((mw - #numText) / 2) + 1, 8)
+  monitor.setTextColor(colors.white)
+  monitor.write(numText)
+
+  mcenter(9,"("..cStr..")",colors.white,bg2)
 
   local playerDia = getPlayerBalance()
-  mcenter(11,"Guthaben: "..playerDia.." Diamanten",colors.white)
+  drawSeparator(12, "GUTHABEN: "..playerDia.." "..string.char(4), COLOR_FRAME)
 
+  -- Ergebnis-Banner
   if r_lastHit then
-    drawBox(4,13,mw-3,16,COLOR_SUCCESS)
-    mcenter(14,"*** GEWONNEN! ***",colors.white,COLOR_SUCCESS)
-    mcenter(15,"+"..r_lastPayout.." Dia (x"..r_lastMult..")",colors.white,COLOR_SUCCESS)
+    drawGradientBox(3,14,mw-2,18,COLOR_SUCCESS,colors.lime)
+    drawDoubleBorder(3,14,mw-2,18,colors.yellow,colors.white)
+    drawWaveText(16,"GEWONNEN!")
+    monitor.setBackgroundColor(colors.lime)
+    mcenter(17,"+"..r_lastPayout.." "..string.char(4).." (x"..r_lastMult..")",colors.white,colors.lime)
   else
-    drawBox(4,13,mw-3,16,COLOR_WARNING)
-    mcenter(14,"Verloren",colors.white,COLOR_WARNING)
-    mcenter(15,"-"..r_stake.." Diamanten",colors.white,COLOR_WARNING)
+    drawGradientBox(3,14,mw-2,18,COLOR_WARNING,colors.red)
+    drawDoubleBorder(3,14,mw-2,18,colors.orange,colors.white)
+    monitor.setBackgroundColor(COLOR_WARNING)
+    mcenter(16,"VERLOREN",colors.white,COLOR_WARNING)
+    monitor.setBackgroundColor(colors.red)
+    mcenter(17,"-"..r_stake.." "..string.char(4),colors.white,colors.red)
   end
 
-  addButton("r_again",4,mh-5,math.floor(mw/2)-1,mh-3,"Nochmal",colors.black,COLOR_HIGHLIGHT)
-  addButton("back_menu",math.floor(mw/2)+1,mh-5,mw-3,mh-3,"Menue",colors.white,COLOR_PANEL)
+  local mid = math.floor(mw/2)
+  addButton("r_again",3,mh-5,mid-1,mh-3,">> Nochmal <<",colors.black,COLOR_HIGHLIGHT)
+  addButton("back_menu",mid+1,mh-5,mw-2,mh-3,"<< Menue",colors.white,COLOR_PANEL)
 end
 
 local function r_doSpin()
@@ -1201,17 +1473,29 @@ local function r_doSpin()
   end
 
   clearButtons()
-  drawChrome("Roulette","Die Kugel rollt...")
-  
-  drawBox(5,5,mw-4,10,COLOR_PANEL_DARK)
-  
-  for i=1,12 do
+  drawChrome("ROULETTE SPIN","Die Kugel rollt...")
+
+  -- Animierter Spin-Bereich
+  local x1, x2, y1, y2 = 4, mw-3, 5, 14
+  drawGradientBox(x1, y1, x2, y2, colors.purple, COLOR_PANEL_DARK)
+  drawDoubleBorder(x1, y1, x2, y2, COLOR_GOLD, colors.orange)
+
+  mcenter(7, "~~~ SPIN ~~~", COLOR_GOLD, colors.purple)
+
+  -- Animierte Zahlen mit wechselnden Farben
+  for i=1,15 do
     local tmp = math.random(0,36)
     local col = getColor(tmp)
     local cStr = (col=="red" and "ROT") or (col=="black" and "SCHWARZ") or "GRUEN"
-    mcenter(7,tostring(tmp),COLOR_GOLD,COLOR_PANEL_DARK)
-    mcenter(8,"("..cStr..")",colors.white,COLOR_PANEL_DARK)
-    sleep(0.08 + i*0.01)
+    local numBg = (col=="red" and colors.red) or (col=="black" and colors.gray) or colors.green
+
+    -- Zahlen-Box mit Farbe
+    drawBox(math.floor(mw/2)-5, 9, math.floor(mw/2)+5, 12, numBg)
+    monitor.setBackgroundColor(numBg)
+    mcenter(10, tostring(tmp), colors.white, numBg)
+    mcenter(11, cStr, colors.white, numBg)
+
+    sleep(0.08 + i*0.015)
   end
 
   local result = spinWheel()
