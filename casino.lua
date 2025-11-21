@@ -27,7 +27,7 @@
 -- + Centralized game configuration (GAME_CONFIG) for easier maintenance
 -- + Extracted helper function for disabled game buttons (reduces duplication)
 -- + Enhanced loadGameStatus() with proper validation and merging
--- + Configurable player detection range (PLAYER_DETECTION_RANGE = 5 blocks)
+-- + Configurable player detection range (PLAYER_DETECTION_RANGE = 15 blocks)
 -- + Fixed Player Detector method check (now uses getPlayersInRange)
 -- + Added pagination to player stats list (was limited to 6, now unlimited)
 -- + Online/offline indicators for players in stats view
@@ -47,39 +47,62 @@
 
 local DIAMOND_ID = "minecraft:diamond"
 local IO_CHEST_DIR = "front"  -- Richtung der IO-Chest von der Bridge aus
-local PLAYER_DETECTION_RANGE = 10  -- Reichweite fuer Player Detector (in Bloecken)
+local PLAYER_DETECTION_RANGE = 15  -- Reichweite fuer Player Detector (in Bloecken)
 local STATS_PAGE_SIZE = 6  -- Anzahl der Spieler pro Seite in der Statistik-Ansicht
 
 -- Bridge-Typen die wir suchen
 local BRIDGE_TYPES = { "meBridge", "me_bridge", "rsBridge", "rs_bridge" }
 
--- Farbschema (Enhanced UI) - Grouped to reduce local variable count
+-- Farbschema (Modern Dark Theme) - Optimized for 5x4 block monitor
 local COLORS = {
+    -- Base colors
     BG           = colors.black,
-    FRAME        = colors.lightGray,
-    HEADER_BG    = colors.purple,
-    HEADER_ACC   = colors.magenta,
+    BG_DARK      = colors.gray,
+
+    -- Header & Chrome
+    HEADER_BG    = colors.cyan,
+    HEADER_ACC   = colors.lightBlue,
     HEADER_TEXT  = colors.white,
     FOOTER_BG    = colors.gray,
-    FOOTER_TEXT  = colors.white,
+    FOOTER_TEXT  = colors.lightGray,
+    FRAME        = colors.cyan,
+
+    -- Panels & Cards
     PANEL        = colors.gray,
     PANEL_DARK   = colors.black,
+    PANEL_LIGHT  = colors.lightGray,
+    CARD_BG      = colors.gray,
+    CARD_BORDER  = colors.lightBlue,
+
+    -- Status colors
     HIGHLIGHT    = colors.lime,
     WARNING      = colors.red,
-    INFO         = colors.cyan,
+    INFO         = colors.lightBlue,
     GOLD         = colors.yellow,
-    SUCCESS      = colors.green,
-    DISABLED     = colors.lightGray,
+    SUCCESS      = colors.lime,
+    DISABLED     = colors.gray,
     ACCENT       = colors.orange,
-    -- Player Stats Theme Colors
-    STATS_HEADER = colors.purple,
-    STATS_BORDER = colors.yellow,
-    STATS_ONLINE = colors.cyan,
+
+    -- Game colors (vibrant and distinct)
+    GAME_ROULETTE  = colors.red,
+    GAME_SLOTS     = colors.purple,
+    GAME_COINFLIP  = colors.yellow,
+    GAME_HILO      = colors.orange,
+    GAME_BLACKJACK = colors.green,
+
+    -- Player Stats Theme
+    STATS_HEADER = colors.cyan,
+    STATS_BORDER = colors.lightBlue,
+    STATS_ONLINE = colors.lime,
     MEDAL_GOLD   = colors.yellow,
     MEDAL_SILVER = colors.lightGray,
     MEDAL_BRONZE = colors.orange,
-    STREAK_WIN   = colors.green,
-    STREAK_LOSS  = colors.red
+    STREAK_WIN   = colors.lime,
+    STREAK_LOSS  = colors.red,
+
+    -- Admin colors
+    ADMIN_BG     = colors.purple,
+    ADMIN_BORDER = colors.pink
 }
 
 -- Commonly used color aliases (to avoid typing COLORS. everywhere)
@@ -97,47 +120,52 @@ local COLOR_ACCENT      = COLORS.ACCENT
 -- Game-Status Datei
 local GAME_STATUS_FILE = "game_status.dat"
 
--- Zentrale Spiel-Konfiguration (Game IDs, Labels, Farben)
+-- Zentrale Spiel-Konfiguration (Game IDs, Labels, Farben) - Updated for modern theme
 local GAME_CONFIG = {
     roulette = {
         id = "roulette",
-        label = "ROULETTE",
+        label = "  ROULETTE",
+        icon = "@",
         mainButtonId = "game_roulette",
         toggleButtonId = "toggle_roulette",
-        enabledColor = colors.red,
+        enabledColor = COLORS.GAME_ROULETTE,
         enabledFg = colors.white
     },
     slots = {
         id = "slots",
-        label = "SLOTS",
+        label = "  SLOTS",
+        icon = "$",
         mainButtonId = "game_slots",
         toggleButtonId = "toggle_slots",
-        enabledColor = colors.purple,
-        enabledFg = colors.yellow
+        enabledColor = COLORS.GAME_SLOTS,
+        enabledFg = colors.white
     },
     coinflip = {
         id = "coinflip",
-        label = "MUENZWURF",
+        label = "  MUENZWURF",
+        icon = "O",
         mainButtonId = "game_coin",
         toggleButtonId = "toggle_coinflip",
-        enabledColor = colors.orange,
-        enabledFg = colors.white
+        enabledColor = COLORS.GAME_COINFLIP,
+        enabledFg = colors.black
     },
     hilo = {
         id = "hilo",
-        label = "HIGH/LOW",
+        label = "  HIGH/LOW",
+        icon = "^",
         mainButtonId = "game_hilo",
         toggleButtonId = "toggle_hilo",
-        enabledColor = colors.blue,
+        enabledColor = COLORS.GAME_HILO,
         enabledFg = colors.white
     },
     blackjack = {
         id = "blackjack",
-        label = "BLACKJACK",
+        label = "  BLACKJACK",
+        icon = "#",
         mainButtonId = "game_blackjack",
         toggleButtonId = "toggle_blackjack",
-        enabledColor = colors.black,
-        enabledFg = colors.yellow
+        enabledColor = COLORS.GAME_BLACKJACK,
+        enabledFg = colors.white
     }
 }
 
@@ -225,13 +253,13 @@ if not bridge then
 end
 
 -- Player Detector suchen (links vom Computer)
-local playerDetector = peripheral.wrap("left")
-if playerDetector and playerDetector.getPlayersInRange then
+local player_detector = peripheral.wrap("left")
+if player_detector and player_detector.getPlayersInRange then
     print("Player Detector gefunden: left")
     print("Erkennungsreichweite: " .. PLAYER_DETECTION_RANGE .. " Bloecke")
 else
     print("WARNUNG: Kein Player Detector auf 'left' gefunden!")
-    playerDetector = nil
+    player_detector = nil
 end
 
 print("Casino gestartet auf Monitor: " .. peripheral.getName(monitor))
@@ -303,29 +331,40 @@ end
 local function drawChrome(title, footer)
     mclearRaw()
 
-    -- Enhanced header with gradient effect
+    -- Modern header design with double line
     monitor.setBackgroundColor(COLORS.HEADER_BG)
     monitor.setTextColor(COLORS.HEADER_TEXT)
     monitor.setCursorPos(1,1)
     monitor.write(string.rep(" ",mw))
-
-    local header = " *** "..title.." *** "
-    if #header > mw then header = header:sub(1,mw) end
-    mcenter(1,header,COLORS.HEADER_TEXT,COLORS.HEADER_BG)
-
-    monitor.setBackgroundColor(COLORS.HEADER_ACC)
     monitor.setCursorPos(1,2)
     monitor.write(string.rep(" ",mw))
 
-    -- Enhanced border
-    drawBorder(1,2,mw,mh-1,COLORS.FRAME)
+    -- Title on first line
+    local titleText = "  "..title.."  "
+    if #titleText > mw then titleText = titleText:sub(1,mw) end
+    mcenter(1,titleText,COLORS.HEADER_TEXT,COLORS.HEADER_BG)
 
-    -- Enhanced footer
+    -- Decorative line on second line
+    monitor.setBackgroundColor(COLORS.HEADER_ACC)
+    monitor.setCursorPos(1,2)
+    monitor.write(string.rep(" ",mw))
+    local divider = string.rep("=", math.min(#titleText + 4, mw-4))
+    mcenter(2,divider,COLORS.HEADER_TEXT,COLORS.HEADER_ACC)
+
+    -- Enhanced border with rounded corners effect
+    drawBorder(1,3,mw,mh-1,COLORS.FRAME)
+
+    -- Modern footer with player info
     monitor.setBackgroundColor(COLORS.FOOTER_BG)
     monitor.setCursorPos(1,mh)
     monitor.write(string.rep(" ",mw))
     if footer then
-        mcenter(mh,footer,COLORS.FOOTER_TEXT,COLORS.FOOTER_BG)
+        -- Add player name to footer if available
+        local footerText = footer
+        if currentPlayer and currentPlayer ~= "Guest" then
+            footerText = "Spieler: "..currentPlayer.." | "..footer
+        end
+        mcenter(mh,footerText,COLORS.FOOTER_TEXT,COLORS.FOOTER_BG)
     end
 
     monitor.setBackgroundColor(COLOR_BG)
@@ -376,6 +415,19 @@ local function addButton(id,x1,y1,x2,y2,label,fg,bg)
         end
         mwrite(tx,ty,line,fg,bg)
     end
+end
+
+-- Issue #14: Helper to deduplicate stake values while preserving order
+local function deduplicateStakes(values)
+    local seen = {}
+    local result = {}
+    for _, v in ipairs(values) do
+        if not seen[v] then
+            seen[v] = true
+            table.insert(result, v)
+        end
+    end
+    return result
 end
 
 local function hitButton(x,y)
@@ -522,12 +574,28 @@ end
 -- players: Array von Player-Objekten vom Detector
 -- names: Array von Spielernamen (String)
 local function getPlayersFromDetector()
-    if not playerDetector then
+    -- Check if player_detector peripheral is still present
+    if player_detector then
+        local detectorName = peripheral.getName(player_detector)
+        if not detectorName or not peripheral.isPresent(detectorName) then
+            print("[PLAYER DETECTOR] Player Detector wurde entfernt!")
+            player_detector = nil
+        end
+    end
+
+    if not player_detector then
+        print("[PLAYER DETECTOR] Kein Player Detector verfuegbar")
         return {players = {}, names = {}}
     end
 
-    local ok, playersInRange = pcall(playerDetector.getPlayersInRange, PLAYER_DETECTION_RANGE)
-    if not ok or not playersInRange then
+    local ok, playersInRange = pcall(player_detector.getPlayersInRange, PLAYER_DETECTION_RANGE)
+    if not ok then
+        print("[PLAYER DETECTOR] Fehler beim Abrufen der Spieler: "..tostring(playersInRange))
+        return {players = {}, names = {}}
+    end
+
+    if not playersInRange then
+        print("[PLAYER DETECTOR] Keine Spieler in Reichweite ("..PLAYER_DETECTION_RANGE.." Bloecke)")
         return {players = {}, names = {}}
     end
 
@@ -536,6 +604,12 @@ local function getPlayersFromDetector()
         if player and player.name then
             table.insert(names, player.name)
         end
+    end
+
+    if #names > 0 then
+        print("[PLAYER DETECTOR] "..#names.." Spieler erkannt: "..table.concat(names, ", "))
+    else
+        print("[PLAYER DETECTOR] Keine Spieler in Reichweite ("..PLAYER_DETECTION_RANGE.." Bloecke)")
     end
 
     return {players = playersInRange, names = names}
@@ -568,13 +642,21 @@ local function getNearestPlayer(detected)
             if player.x and player.y and player.z then
                 -- Distanz vom Detector (Koordinaten sind relativ zum Detector)
                 local distanceSq = player.x^2 + player.y^2 + player.z^2
+                local distance = math.sqrt(distanceSq)
+                print("[NEAREST PLAYER] "..player.name.." - Distanz: "..string.format("%.2f", distance).." Bloecke (x="..player.x..", y="..player.y..", z="..player.z..")")
                 if distanceSq < minDistanceSq then
                     minDistanceSq = distanceSq
                     nearestPlayer = player.name
                 end
+            else
+                print("[NEAREST PLAYER] "..player.name.." - Keine Koordinaten verfuegbar")
             end
             -- Spieler ohne Koordinaten werden ignoriert (kein Fallback)
         end
+    end
+
+    if nearestPlayer then
+        print("[NEAREST PLAYER] Ausgewaehlt: "..nearestPlayer.." (Distanz: "..string.format("%.2f", math.sqrt(minDistanceSq)).." Bloecke)")
     end
 
     return nearestPlayer
@@ -608,6 +690,8 @@ local function trackPlayers()
                     longestWinStreak = 0,
                     longestLoseStreak = 0
                 }
+                -- Guest Stats direkt speichern, damit sie persistent sind
+                safeSavePlayerStats("trackPlayers - Guest created")
             end
         end
         return
@@ -627,7 +711,15 @@ local function trackPlayers()
             -- Neuer Besuch?
             if not lastSeenPlayers[playerName] then
                 stats.totalVisits = stats.totalVisits + 1
+                print("[TRACKING] Neuer Besuch von: "..playerName.." (Besuch #"..stats.totalVisits..")")
             end
+        end
+    end
+
+    -- Prüfe welche Spieler die Range verlassen haben
+    for playerName, _ in pairs(lastSeenPlayers) do
+        if not newSeenPlayers[playerName] then
+            print("[TRACKING] Spieler hat Range verlassen: "..playerName)
         end
     end
 
@@ -649,10 +741,16 @@ local function trackPlayers()
 
     -- Aktualisiere currentPlayer nur wenn ein gültiger Spieler gefunden wurde
     -- (verhindert, dass currentPlayer mid-game gelöscht wird)
+    -- Issue #6: Don't change currentPlayer during active games
     -- Verwende bereits ermittelte Detector-Daten um Doppelabfrage zu vermeiden
     local nearestPlayer = getNearestPlayer(detected)
-    if nearestPlayer then
+    if nearestPlayer and not gameInProgress then
+        if currentPlayer ~= nearestPlayer then
+            print("[TRACKING] Neuer naechster Spieler: "..nearestPlayer.." (vorher: "..(currentPlayer or "keiner")..")")
+        end
         currentPlayer = nearestPlayer
+    elseif nearestPlayer and gameInProgress then
+        print("[TRACKING] Spiel laeuft - behalte aktuellen Spieler: "..(currentPlayer or "Guest"))
     end
 end
 
@@ -737,17 +835,46 @@ end
 -- Statistiken laden beim Start
 loadPlayerStats()
 
+-- Issue #21: Ensure Guest stats exist at startup
+if not playerStats["Guest"] then
+    playerStats["Guest"] = {
+        name = "Guest",
+        firstSeen = os.epoch("utc"),
+        lastSeen = os.epoch("utc"),
+        totalVisits = 0,
+        totalTimeSpent = 0,
+        gamesPlayed = 0,
+        totalWagered = 0,
+        totalWon = 0,
+        totalLost = 0,
+        biggestWin = 0,
+        biggestLoss = 0,
+        currentStreak = 0,
+        longestWinStreak = 0,
+        longestLoseStreak = 0
+    }
+    safeSavePlayerStats("Guest initialization at startup")
+end
+
 ----------- INVENTAR / STORAGE ------------
 
 -- Diamanten im Netzwerk zählen (Casino-Bank-Reserve)
 local function getItemCountInNet(name)
     if not bridge then
-        print("[FEHLER] getItemCountInNet: Bridge nicht verfügbar!")
-        return 0
+        error("[FEHLER] getItemCountInNet: Bridge nicht verfügbar! Hardware-Problem!")
     end
 
     local ok, res = pcall(bridge.getItem, { name = name })
-    if not ok or not res then return 0 end
+    if not ok then
+        print("[FEHLER] getItemCountInNet pcall fehlgeschlagen: "..tostring(res))
+        return 0  -- Bei temporären Fehlern 0 zurückgeben
+    end
+
+    if not res then
+        print("[INFO] getItemCountInNet: Item nicht im System gefunden")
+        return 0  -- Kein Item = 0 ist korrekt
+    end
+
     return res.amount or res.count or 0
 end
 
@@ -759,33 +886,31 @@ local function getPlayerBalance()
     -- Chest direkt vom Computer auslesen
     -- IO_CHEST_DIR = Seite vom Computer aus (z.B. "front")
     local chest = peripheral.wrap(IO_CHEST_DIR)
-    if chest and chest.list then
-        local total = 0
-        local ok, list = pcall(chest.list)
-        if ok and type(list) == "table" then
-            for _, stack in pairs(list) do
-                if stack and stack.name == DIAMOND_ID then
-                    total = total + (stack.count or 0)
-                end
-            end
-        else
-            if not ok then
-                print("[WARNUNG] getPlayerBalance chest.list() Fehler: "..tostring(list))
-            end
-        end
-        return total
-    else
-        print("[WARNUNG] getPlayerBalance: Keine Chest auf '"..IO_CHEST_DIR.."' gefunden")
+    if not chest or not chest.list then
+        error("[FEHLER] getPlayerBalance: Keine Chest auf '"..IO_CHEST_DIR.."' gefunden! Hardware-Problem!")
     end
 
-    -- Wenn alles schief geht: 0
-    return 0
+    local total = 0
+    local ok, list = pcall(chest.list)
+    if ok and type(list) == "table" then
+        for _, stack in pairs(list) do
+            if stack and stack.name == DIAMOND_ID then
+                total = total + (stack.count or 0)
+            end
+        end
+    else
+        print("[WARNUNG] getPlayerBalance chest.list() Fehler: "..tostring(list))
+        print("[INFO] Returniere 0 bei list() Fehler")
+        return 0
+    end
+
+    return total
 end
 
 
 -- Einsatz: Nimm Diamanten aus IO-Chest und packe sie ins Netzwerk (Casino-Bank)
 local function takeStake(amount)
-    amount = tonumber(amount) or 0
+    amount = math.floor(tonumber(amount) or 0)  -- Issue #13: Ensure integer
     if amount <= 0 then return 0 end
 
     if not bridge then
@@ -807,22 +932,31 @@ local function takeStake(amount)
 
     local result = imported or 0
     print("[EINSATZ] Genommen:", result)
+
+    -- If partial import occurred, refund the partial amount to prevent diamond loss
+    if result > 0 and result < amount then
+        print("[WARNUNG] Partial import detected! Nehme "..result.." statt "..amount)
+        print("[REFUND] Erstatte partial stake von "..result.." Diamanten zurueck")
+        rawExportDiamonds(result)
+        return 0  -- Return 0 to indicate stake taking failed
+    end
+
     return result
 end
 
 ------------- PENDING PAYOUT --------------
 
 -- Offene (nicht auszahlbare) Gewinne, falls Kiste voll ist
--- Offene Gewinne, falls Kiste voll ist
 local pendingPayout = 0
 local payoutBlocked = false
+local payoutInProgress = false  -- Issue #7: Prevent concurrent payout operations
 
 -- maximale Menge, die pro Versuch exportiert wird
 local MAX_EXPORT_CHUNK = 4096   -- kannst du bei Bedarf anpassen
 
 
 local function rawExportDiamonds(amount)
-    amount = tonumber(amount) or 0
+    amount = math.floor(tonumber(amount) or 0)  -- Issue #13: Ensure integer
     if amount <= 0 then return 0 end
 
     if not bridge then
@@ -891,7 +1025,7 @@ end
 
 -- Gewinn: Zahle Diamanten aus Netzwerk (Casino-Bank) in IO-Chest
 local function payPayout(amount)
-    amount = tonumber(amount) or 0
+    amount = math.floor(tonumber(amount) or 0)  -- Issue #13: Ensure integer
 
     -- Erst versuchen, offene Gewinne weiter auszuzahlen
     flushPendingPayoutIfPossible()
@@ -907,7 +1041,8 @@ local function payPayout(amount)
 
     if exported < amount then
         local notPaid = amount - exported
-        pendingPayout = (tonumber(pendingPayout) or 0) + notPaid
+        -- Issue #20: Simplified - pendingPayout is always a number, no need to sanitize mid-operation
+        pendingPayout = pendingPayout + notPaid
         payoutBlocked = true
         print("[WARNUNG] Nicht alles passte in die Kiste. Offen dazu: "..notPaid.." | Gesamt offen: "..pendingPayout)
     else
@@ -920,14 +1055,10 @@ end
 
 ------------- GLOBAL STATE -------------
 
--- App State (grouped)
-local AppState = {
-    mode = "menu",
-    currentPlayer = nil
-}
-
-local mode = AppState.mode
-local currentPlayer = AppState.currentPlayer
+-- App State (no longer using AppState table - Issue #18 fix)
+local mode = "menu"
+local currentPlayer = nil
+local gameInProgress = false  -- Issue #6: Lock currentPlayer during active games
 
 -- Admin State (grouped)
 local AdminState = {
@@ -938,71 +1069,9 @@ local AdminState = {
 }
 
 -- Game State Variables (grouped to reduce local count)
-local GameState = {
-    -- Roulette
-    r = {
-        state = "type",
-        betType = nil,
-        choice = nil,
-        stake = 0,
-        lastResult = nil,
-        lastColor = nil,
-        lastHit = nil,
-        lastPayout = nil,
-        lastMult = nil,
-        player = nil
-    },
-    -- Coinflip
-    c = {
-        state = "stake",
-        stake = 0,
-        choice = nil,
-        lastWin = false,
-        lastPayout = 0,
-        lastSide = nil,
-        player = nil
-    },
-    -- High/Low
-    h = {
-        state = "stake",
-        stake = 0,
-        startNum = nil,
-        nextNum = nil,
-        choice = nil,
-        lastWin = false,
-        lastPayout = 0,
-        lastPush = false,
-        player = nil
-    },
-    -- Blackjack
-    bj = {
-        state = "stake",
-        stake = 0,
-        playerHand = {},
-        dealerHand = {},
-        deck = {},
-        lastWin = false,
-        lastPayout = 0,
-        lastResult = "",
-        player = nil
-    },
-    -- Slots
-    s = {
-        state = "setup",
-        bet = 1,
-        grid = {{},{},{}},
-        lastWin = false,
-        lastMult = 0,
-        lastPayout = 0,
-        freeSpins = 0,
-        totalWin = 0,
-        winLines = {},
-        freeSpinBet = 0,
-        player = nil
-    }
-}
-
--- Backwards compatibility aliases for game state
+-- Issue #4: Removed unused GameState table - was never accessed, just a structure template
+-- Game state variables (actual game state stored in these local variables)
+-- Roulette
 local r_state, r_betType, r_choice, r_stake = "type", nil, nil, 0
 local r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
 local r_player = nil
@@ -1085,6 +1154,8 @@ end
 ----------- HAUPTMENÜ ------------------
 
 local function drawMainMenu()
+    gameInProgress = false  -- Issue #6: Unlock player tracking in menu
+
     -- Versuch, ausstehende Gewinne nachzuzahlen
     flushPendingPayoutIfPossible()
     if (pendingPayout or 0) > 0 then
@@ -1094,78 +1165,81 @@ local function drawMainMenu()
     end
 
     clearButtons()
-    drawChrome("CASINO LOUNGE","Tippe ein Spiel um zu starten")
+    drawChrome("CASINO LOUNGE","Waehle dein Gluecksspiel")
 
     local playerDia = getPlayerBalance()
     local bankDia = getItemCountInNet(DIAMOND_ID)
 
-    local x1,x2,y1,y2 = 4,mw-3,4,10
-    drawBox(x1,y1,x2,y2,COLOR_PANEL_DARK)
-    drawBorder(x1,y1,x2,y2,COLORS.FRAME)
-    
-    mcenter(5,"=== DEIN GUTHABEN ===",COLOR_GOLD,COLOR_PANEL_DARK)
-    mcenter(7,playerDia.." Diamanten",COLOR_SUCCESS,COLOR_PANEL_DARK)
-    mcenter(8,"(in Chest vor dir)",colors.lightGray,COLOR_PANEL_DARK)
-    
+    -- Balance Card (compact, modern design)
+    local cardY = 4
+    local cardW = math.floor(mw * 0.6)
+    local cardX1 = math.floor((mw - cardW) / 2)
+    local cardX2 = cardX1 + cardW
+
+    drawBox(cardX1, cardY, cardX2, cardY + 4, COLORS.CARD_BG)
+    drawBorder(cardX1, cardY, cardX2, cardY + 4, COLORS.CARD_BORDER)
+
+    mcenter(cardY + 1, "GUTHABEN", COLORS.GOLD, COLORS.CARD_BG)
+    mcenter(cardY + 2, playerDia.." Diamanten", COLOR_SUCCESS, COLORS.CARD_BG)
+
     if playerDia == 0 then
-        mcenter(11,"Lege Diamanten in die Chest!",COLOR_WARNING)
-        mcenter(12,"Richtung: "..IO_CHEST_DIR,colors.lightGray)
-    end
-    
-    if bankDia < 100 then
-        mcenter(mh-3,"[Admin] Casino-Bank niedrig: "..bankDia,colors.red)
+        mcenter(cardY + 3, "Lege Diamanten ein!", colors.white, COLORS.CARD_BG)
+    else
+        mcenter(cardY + 3, "Viel Glueck!", colors.lightGray, COLORS.CARD_BG)
     end
 
-    local btnH = 3
-    local gap = 1
-    local mid = math.floor(mw/2)
-    local startY = (playerDia == 0) and 14 or 12
+    if bankDia < 100 then
+        mcenter(cardY + 5, "[WARNUNG] Casino-Bank: "..bankDia, COLOR_WARNING)
+    end
+
+    -- Game Grid (2 columns, optimized spacing)
+    local btnH = 4
+    local gap = 2
+    local colW = math.floor((mw - 6) / 2) - 1
+    local col1X = 3
+    local col2X = col1X + colW + 3
+    local startY = cardY + 7
+
+    -- Helper function for game cards with icons
+    local function drawGameCard(config, x1, y1, x2, y2, enabled)
+        if enabled then
+            -- Draw game card with icon
+            drawBox(x1, y1, x2, y2, config.enabledColor)
+            drawBorder(x1, y1, x2, y2, colors.white)
+
+            -- Icon
+            local iconY = y1 + 1
+            mcenter(iconY, config.icon, config.enabledFg, config.enabledColor)
+
+            -- Label
+            local labelY = iconY + 1
+            mcenter(labelY, config.label, config.enabledFg, config.enabledColor)
+
+            addButton(config.mainButtonId, x1, y1, x2, y2, "", config.enabledFg, config.enabledColor)
+        else
+            drawDisabledGameButton(x1, y1, x2, y2, config.label)
+        end
+    end
 
     -- Row 1: Roulette & Slots
-    local rConfig = GAME_CONFIG.roulette
-    if gameStatus.roulette then
-        addButton(rConfig.mainButtonId, 3, startY, mid-1, startY+btnH, rConfig.label, rConfig.enabledFg, rConfig.enabledColor)
-    else
-        drawDisabledGameButton(3, startY, mid-1, startY+btnH, rConfig.label)
-    end
+    drawGameCard(GAME_CONFIG.roulette, col1X, startY, col1X + colW, startY + btnH, gameStatus.roulette)
+    drawGameCard(GAME_CONFIG.slots, col2X, startY, col2X + colW, startY + btnH, gameStatus.slots)
 
-    local sConfig = GAME_CONFIG.slots
-    if gameStatus.slots then
-        addButton(sConfig.mainButtonId, mid+1, startY, mw-2, startY+btnH, sConfig.label, sConfig.enabledFg, sConfig.enabledColor)
-    else
-        drawDisabledGameButton(mid+1, startY, mw-2, startY+btnH, sConfig.label)
-    end
-
-    startY = startY + btnH + gap + 1
+    startY = startY + btnH + gap
 
     -- Row 2: Coinflip & High/Low
-    local cConfig = GAME_CONFIG.coinflip
-    if gameStatus.coinflip then
-        addButton(cConfig.mainButtonId, 3, startY, mid-1, startY+btnH, cConfig.label, cConfig.enabledFg, cConfig.enabledColor)
-    else
-        drawDisabledGameButton(3, startY, mid-1, startY+btnH, cConfig.label)
-    end
+    drawGameCard(GAME_CONFIG.coinflip, col1X, startY, col1X + colW, startY + btnH, gameStatus.coinflip)
+    drawGameCard(GAME_CONFIG.hilo, col2X, startY, col2X + colW, startY + btnH, gameStatus.hilo)
 
-    local hConfig = GAME_CONFIG.hilo
-    if gameStatus.hilo then
-        addButton(hConfig.mainButtonId, mid+1, startY, mw-2, startY+btnH, hConfig.label, hConfig.enabledFg, hConfig.enabledColor)
-    else
-        drawDisabledGameButton(mid+1, startY, mw-2, startY+btnH, hConfig.label)
-    end
+    startY = startY + btnH + gap
 
-    startY = startY + btnH + gap + 1
+    -- Row 3: Blackjack (full width)
+    drawGameCard(GAME_CONFIG.blackjack, col1X, startY, col2X + colW, startY + btnH, gameStatus.blackjack)
 
-    -- Row 3: Blackjack
-    local bConfig = GAME_CONFIG.blackjack
-    if gameStatus.blackjack then
-        addButton(bConfig.mainButtonId, 3, startY, mw-2, startY+btnH, bConfig.label, bConfig.enabledFg, bConfig.enabledColor)
-    else
-        drawDisabledGameButton(3, startY, mw-2, startY+btnH, bConfig.label)
-    end
-
-    addButton("admin_panel",mw-6,mh-2,mw-2,mh-1,"[A]",colors.gray,COLOR_BG)
-    
-    mcenter(mh-2,"Viel Glueck!",colors.lightGray)
+    -- Bottom buttons (Stats & Admin)
+    local btnY = mh - 2
+    addButton("player_stats", 3, btnY, math.floor(mw/2)-1, btnY, "STATS", colors.white, COLORS.INFO)
+    addButton("admin_panel", math.floor(mw/2)+1, btnY, mw-2, btnY, "ADMIN", colors.white, COLORS.ADMIN_BG)
 end
 
 ------------- ADMIN PANEL --------------
@@ -1443,37 +1517,44 @@ end
 
 local function drawAdminPanel()
     clearButtons()
-    drawChrome("Admin-Panel","Geschuetzter Bereich")
-    
+    drawChrome("ADMIN PANEL","Geschuetzter Bereich")
+
     local playerDia = getPlayerBalance()
     local bankDia = getItemCountInNet(DIAMOND_ID)
-    
-    drawBox(4,4,mw-3,12,COLOR_PANEL_DARK)
-    drawBorder(4,4,mw-3,12,colors.orange)
-    
-    mcenter(5,"=== CASINO STATUS ===",colors.orange,COLOR_PANEL_DARK)
-    mcenter(7,"Spieler-Chest: "..playerDia.." Dia",COLOR_INFO,COLOR_PANEL_DARK)
-    mcenter(8,"Casino-Bank: "..bankDia.." Dia",COLOR_SUCCESS,COLOR_PANEL_DARK)
-    mcenter(10,"Monitor: "..mw.."x"..mh,colors.lightGray,COLOR_PANEL_DARK)
-    mcenter(11,"IO-Richtung: "..IO_CHEST_DIR,colors.lightGray,COLOR_PANEL_DARK)
 
+    -- Status Card (modern design)
+    drawBox(4,4,mw-3,12,COLORS.ADMIN_BG)
+    drawBorder(4,4,mw-3,12,COLORS.ADMIN_BORDER)
+
+    mcenter(5,"CASINO STATUS",COLORS.ADMIN_BORDER,COLORS.ADMIN_BG)
+    mcenter(7,"Spieler-Chest: "..playerDia.." Dia",colors.white,COLORS.ADMIN_BG)
+    mcenter(8,"Casino-Bank: "..bankDia.." Dia",colors.yellow,COLORS.ADMIN_BG)
+    mcenter(10,"Monitor: "..mw.."x"..mh,colors.lightGray,COLORS.ADMIN_BG)
+    mcenter(11,"IO-Richtung: "..IO_CHEST_DIR,colors.lightGray,COLORS.ADMIN_BG)
+
+    -- Warning Box (if needed)
     if pendingPayout > 0 then
         drawBox(4,14,mw-3,17,COLOR_WARNING)
+        drawBorder(4,14,mw-3,17,colors.white)
         mcenter(15,"Offene Gewinne: "..pendingPayout.." Dia",colors.white,COLOR_WARNING)
         mcenter(16,"Kiste leeren & im Menue pruefen",colors.white,COLOR_WARNING)
     elseif bankDia < 100 then
         drawBox(4,14,mw-3,17,COLOR_WARNING)
+        drawBorder(4,14,mw-3,17,colors.white)
         mcenter(15,"WARNUNG!",colors.white,COLOR_WARNING)
         mcenter(16,"Casino-Bank zu niedrig!",colors.white,COLOR_WARNING)
     end
-    
+
+    -- Action Buttons (modern card style)
     local btnY = 19
-    addButton("admin_collect",4,btnY,math.floor(mw/2)-1,btnY+2,"Chest leeren\n(Collect)",colors.black,colors.orange)
-    addButton("admin_refill",math.floor(mw/2)+1,btnY,mw-3,btnY+2,"Bank fuellen\n(Refill)",colors.black,colors.cyan)
+    local mid = math.floor(mw/2)
+
+    addButton("admin_collect",4,btnY,mid-1,btnY+2,"Chest leeren\n(Collect)",colors.white,colors.orange)
+    addButton("admin_refill",mid+1,btnY,mw-3,btnY+2,"Bank fuellen\n(Refill)",colors.white,colors.cyan)
 
     btnY = btnY + 4
-    addButton("admin_stats",4,btnY,math.floor(mw/2)-1,btnY+2,"Statistiken",colors.white,COLOR_PANEL)
-    addButton("admin_games",math.floor(mw/2)+1,btnY,mw-3,btnY+2,"Spiele\nverwalten",colors.black,COLOR_HIGHLIGHT)
+    addButton("admin_stats",4,btnY,mid-1,btnY+2,"Spieler\nStatistiken",colors.white,COLORS.INFO)
+    addButton("admin_games",mid+1,btnY,mw-3,btnY+2,"Spiele\nverwalten",colors.white,COLORS.SUCCESS)
 
     addButton("admin_close",3,mh-3,mw-2,mh-2,"<< Schliessen",colors.white,COLOR_WARNING)
 end
@@ -1748,6 +1829,7 @@ local function resolveRoulette(betType, choice, result)
   local mult = 0
 
   if betType == 1 then
+    -- Issue #12: 36x payout = 35:1 profit + stake return (standard roulette payout)
     if result == choice then hit = true; mult = 36 end
   elseif betType == 2 then
     if result ~= 0 and color == choice then hit = true; mult = 2 end
@@ -1856,15 +1938,23 @@ local function r_drawChooseStake()
   local maxStake = playerDia
   mcenter(9,"Waehle deinen Einsatz:",colors.white)
 
+  -- Issue #14: Deduplicate stake buttons to prevent duplicates at low balance
   local quarter = math.max(1,math.floor(maxStake/4))
-  local bw = math.floor((mw-10)/4)
+  local stakeValues = deduplicateStakes({quarter, quarter*2, quarter*3, maxStake})
+
+  local bw = math.floor((mw-10)/#stakeValues)
   if bw<4 then bw=4 end
   local x=4
   local y=11
-  addButton("r_stake_"..quarter,     x,y,x+bw,y+2,tostring(quarter),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("r_stake_"..(quarter*2), x,y,x+bw,y+2,tostring(quarter*2),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("r_stake_"..(quarter*3), x,y,x+bw,y+2,tostring(quarter*3),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("r_stake_"..maxStake,    x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  for i, stake in ipairs(stakeValues) do
+    local isMax = (stake == maxStake)
+    local label = isMax and ("MAX\n"..tostring(stake)) or tostring(stake)
+    local bg = isMax and COLOR_HIGHLIGHT or COLOR_PANEL
+    local fg = isMax and colors.black or colors.white
+    addButton("r_stake_"..stake, x,y,x+bw,y+2, label, fg, bg)
+    x = x + bw + 1
+  end
 
   addButton("back_r_type",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
 end
@@ -1907,6 +1997,7 @@ end
 local function r_doSpin()
   -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
   r_player = currentPlayer
+  gameInProgress = true  -- Issue #6: Lock player tracking during game
 
   local playerDia = getPlayerBalance()
   if playerDia < r_stake then
@@ -2018,9 +2109,15 @@ end
 ------------- COINFLIP -----------------
 
 local function c_drawStake()
+  -- Issue #35: Safety check - ensure game is enabled
+  if not gameStatus.coinflip then
+    mode = "menu"
+    drawMainMenu()
+    return
+  end
   clearButtons()
   drawChrome("Muenzwurf","Setze deinen Einsatz")
-  
+
   local playerDia = getPlayerBalance()
   
   drawBox(5,4,mw-4,7,COLOR_PANEL_DARK)
@@ -2035,16 +2132,24 @@ local function c_drawStake()
 
   mcenter(9,"Gewinnchance: 50% | Gewinn: 2x Einsatz",COLOR_GOLD)
 
+  -- Issue #14: Deduplicate stake buttons to prevent duplicates at low balance
   local maxStake = playerDia
   local q = math.max(1,math.floor(maxStake/4))
-  local bw = math.floor((mw-10)/4)
+  local stakeValues = deduplicateStakes({q, q*2, q*3, maxStake})
+
+  local bw = math.floor((mw-10)/#stakeValues)
   if bw<4 then bw=4 end
   local x=4
   local y=11
-  addButton("c_stake_"..q,      x,y,x+bw,y+2,tostring(q),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("c_stake_"..(q*2),  x,y,x+bw,y+2,tostring(q*2),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("c_stake_"..(q*3),  x,y,x+bw,y+2,tostring(q*3),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("c_stake_"..maxStake,x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  for i, stake in ipairs(stakeValues) do
+    local isMax = (stake == maxStake)
+    local label = isMax and ("MAX\n"..tostring(stake)) or tostring(stake)
+    local bg = isMax and COLOR_HIGHLIGHT or COLOR_PANEL
+    local fg = isMax and colors.black or colors.white
+    addButton("c_stake_"..stake, x,y,x+bw,y+2, label, fg, bg)
+    x = x + bw + 1
+  end
 
   addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
 end
@@ -2093,6 +2198,7 @@ end
 local function c_doFlip()
   -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
   c_player = currentPlayer
+  gameInProgress = true  -- Issue #6: Lock player tracking during game
 
   local playerDia = getPlayerBalance()
   if playerDia < c_stake then
@@ -2177,16 +2283,24 @@ local function h_drawStake()
   mcenter(9,"Rate ob die naechste Zahl hoeher oder tiefer ist!",COLOR_GOLD)
   mcenter(10,"Push bei Gleichstand - Einsatz zurueck",colors.lightGray)
 
+  -- Issue #14: Deduplicate stake buttons to prevent duplicates at low balance
   local maxStake = playerDia
   local q = math.max(1,math.floor(maxStake/4))
-  local bw = math.floor((mw-10)/4)
+  local stakeValues = deduplicateStakes({q, q*2, q*3, maxStake})
+
+  local bw = math.floor((mw-10)/#stakeValues)
   if bw<4 then bw=4 end
   local x=4
   local y=12
-  addButton("h_stake_"..q,     x,y,x+bw,y+2,tostring(q),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("h_stake_"..(q*2), x,y,x+bw,y+2,tostring(q*2),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("h_stake_"..(q*3), x,y,x+bw,y+2,tostring(q*3),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("h_stake_"..maxStake,x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  for i, stake in ipairs(stakeValues) do
+    local isMax = (stake == maxStake)
+    local label = isMax and ("MAX\n"..tostring(stake)) or tostring(stake)
+    local bg = isMax and COLOR_HIGHLIGHT or COLOR_PANEL
+    local fg = isMax and colors.black or colors.white
+    addButton("h_stake_"..stake, x,y,x+bw,y+2, label, fg, bg)
+    x = x + bw + 1
+  end
 
   addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
 end
@@ -2246,6 +2360,7 @@ end
 local function h_doRound()
   -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
   h_player = currentPlayer
+  gameInProgress = true  -- Issue #6: Lock player tracking during game
 
   local playerDia = getPlayerBalance()
   if playerDia < h_stake then
@@ -2280,7 +2395,8 @@ local function h_doRound()
   end
 
   -- Statistik erfassen (verwende h_player statt currentPlayer für korrekte Attribution)
-  if h_player then
+  -- Don't count pushes (ties) as games played
+  if h_player and not push then
     updateGameStats(h_player, h_stake, h_lastWin, h_lastPayout)
   end
 
@@ -2333,6 +2449,9 @@ local function bj_shuffleDeck(deck)
 end
 
 local function bj_drawCard(deck)
+  if #deck == 0 then
+    error("Blackjack deck is empty! This should not happen.")
+  end
   return table.remove(deck)
 end
 
@@ -2397,16 +2516,24 @@ local function bj_drawStake()
 
   mcenter(9,"Blackjack zahlt 3:2 | Gewinn: 1:1 | Push bei Gleichstand",COLOR_GOLD)
 
+  -- Issue #14: Deduplicate stake buttons to prevent duplicates at low balance
   local maxStake = playerDia
   local q = math.max(1,math.floor(maxStake/4))
-  local bw = math.floor((mw-10)/4)
+  local stakeValues = deduplicateStakes({q, q*2, q*3, maxStake})
+
+  local bw = math.floor((mw-10)/#stakeValues)
   if bw<4 then bw=4 end
   local x=4
   local y=11
-  addButton("bj_stake_"..q,     x,y,x+bw,y+2,tostring(q),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("bj_stake_"..(q*2), x,y,x+bw,y+2,tostring(q*2),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("bj_stake_"..(q*3), x,y,x+bw,y+2,tostring(q*3),colors.white,COLOR_PANEL); x=x+bw+1
-  addButton("bj_stake_"..maxStake,x,y,x+bw,y+2,"MAX\n"..tostring(maxStake),colors.black,COLOR_HIGHLIGHT)
+
+  for i, stake in ipairs(stakeValues) do
+    local isMax = (stake == maxStake)
+    local label = isMax and ("MAX\n"..tostring(stake)) or tostring(stake)
+    local bg = isMax and COLOR_HIGHLIGHT or COLOR_PANEL
+    local fg = isMax and colors.black or colors.white
+    addButton("bj_stake_"..stake, x,y,x+bw,y+2, label, fg, bg)
+    x = x + bw + 1
+  end
 
   addButton("back_menu",3,mh-3,mw-2,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
 end
@@ -2519,7 +2646,8 @@ local function bj_dealerPlay()
   if playerVal > 21 then
     bj_lastResult = "lose"
   elseif bj_isBlackjack(bj_playerHand) and not bj_isBlackjack(bj_dealerHand) then
-    local paid = payPayout(math.floor(bj_stake * 2.5))
+    -- Issue #10: Proper 3:2 blackjack payout (stake + 1.5x profit)
+    local paid = payPayout(bj_stake + math.floor(bj_stake * 1.5))
     bj_lastWin = true
     bj_lastPayout = paid
     bj_lastResult = "blackjack"
@@ -2546,7 +2674,8 @@ local function bj_dealerPlay()
   end
 
   -- Statistik erfassen (verwende bj_player statt currentPlayer für korrekte Attribution)
-  if bj_player then
+  -- Issue #9: Don't count pushes (ties) in stats
+  if bj_player and bj_lastResult ~= "push" then
     updateGameStats(bj_player, bj_stake, bj_lastWin, bj_lastPayout)
   end
 
@@ -2557,6 +2686,7 @@ end
 local function bj_startGame()
   -- Erfasse den Spieler, der dieses Spiel startet (nicht mid-game änderbar)
   bj_player = currentPlayer
+  gameInProgress = true  -- Issue #6: Lock player tracking during game
 
   local playerDia = getPlayerBalance()
   if playerDia < bj_stake then
@@ -2616,17 +2746,27 @@ local function handleBlackjackButton(id)
       bj_dealerPlay()
       
     elseif id=="back_menu" then
+      -- Issue #34: Reset game state when returning to menu during play
       local paid = payPayout(bj_stake)
       if checkPayoutLock() then return end
+      bj_state = "stake"
+      bj_player = nil
+      bj_playerHand = {}
+      bj_dealerHand = {}
+      bj_deck = {}
+      bj_stake = 0
       mode="menu"; drawMainMenu()
     end
-    
+
   elseif bj_state == "result" then
     if id=="bj_again" then
       bj_state = "stake"
       bj_player = nil
       bj_drawStake()
     elseif id=="back_menu" then
+      -- Issue #34: Reset game state when returning to menu
+      bj_state = "stake"
+      bj_player = nil
       mode="menu"; drawMainMenu()
     end
   end
@@ -2833,130 +2973,136 @@ local function s_doSpin()
   -- Erfasse den Spieler beim ersten echten Spin (nicht bei Freispielen)
   if s_freeSpins == 0 then
     s_player = currentPlayer
+    gameInProgress = true  -- Issue #6: Lock player tracking during game
   end
 
-  local playerDia = getPlayerBalance()
-  local isFreeSpin = (s_freeSpins > 0)
-  local cost = isFreeSpin and 0 or s_bet
-  
-  if cost > 0 and playerDia < cost then
-    clearButtons()
-    drawChrome("Slots","Nicht genug Guthaben")
-    drawBox(5,6,mw-4,10,COLOR_WARNING)
-    mcenter(7,"Zu wenig Diamanten!",colors.white,COLOR_WARNING)
-    mcenter(8,"Guthaben: "..playerDia.." | Bedarf: "..cost,colors.white,COLOR_WARNING)
-    addButton("s_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
-    s_state="setup"
-    return
-  end
+  -- Use while loop instead of recursion to prevent stack overflow
+  while true do
+    local playerDia = getPlayerBalance()
+    local isFreeSpin = (s_freeSpins > 0)
+    local cost = isFreeSpin and 0 or s_bet
 
-  if cost > 0 then
-    local taken = takeStake(cost)
-    if taken < cost then
-      s_lastWin=false; s_lastPayout=0
+    if cost > 0 and playerDia < cost then
+      clearButtons()
+      drawChrome("Slots","Nicht genug Guthaben")
+      drawBox(5,6,mw-4,10,COLOR_WARNING)
+      mcenter(7,"Zu wenig Diamanten!",colors.white,COLOR_WARNING)
+      mcenter(8,"Guthaben: "..playerDia.." | Bedarf: "..cost,colors.white,COLOR_WARNING)
+      addButton("s_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
       s_state="setup"
-      drawMainMenu()
       return
     end
-    s_freeSpinBet = cost
-  end
-  
-  if isFreeSpin then
-    s_freeSpins = s_freeSpins - 1
-  end
 
-  s_state="spinning"
-  s_grid = s_spinGrid()
-  sleep(0.5)
-  
-  local mult, winningLines, freeSpinsWon = s_evaluateGrid(s_grid)
-  
-  s_lastMult = mult
-  s_winLines = winningLines
-  
-  if freeSpinsWon > 0 then
-    s_freeSpins = s_freeSpins + freeSpinsWon
-    
-    clearButtons()
-    mclearRaw()
-    drawChrome("FREE SPINS!","Du hast Freispiele gewonnen!")
-    
-    local msgY = math.floor(mh/2) - 3
-    
-    for i=1,5 do
-      drawBox(5,msgY,mw-4,msgY+6,colors.purple)
-      
-      local col1 = (i % 2 == 1) and colors.yellow or colors.white
-      local col2 = (i % 2 == 1) and colors.white or colors.yellow
-      
-      mcenter(msgY+1,"* * * * * *",col1,colors.purple)
-      mcenter(msgY+2,"FREE SPINS!",col2,colors.purple)
-      mcenter(msgY+3,"+"..freeSpinsWon.." Freispiele",col1,colors.purple)
-      mcenter(msgY+4,"Gesamt: "..s_freeSpins,col2,colors.purple)
-      mcenter(msgY+5,"* * * * * *",col1,colors.purple)
-      
-      sleep(0.3)
+    if cost > 0 then
+      local taken = takeStake(cost)
+      if taken < cost then
+        s_lastWin=false; s_lastPayout=0
+        s_state="setup"
+        drawMainMenu()
+        return
+      end
+      s_freeSpinBet = cost
     end
-    
-    sleep(1)
-  end
 
-  local payoutBet
-  if isFreeSpin then
-    payoutBet = s_freeSpinBet
-  else
-    payoutBet = cost
-  end
+    if isFreeSpin then
+      s_freeSpins = s_freeSpins - 1
+    end
 
-  if mult > 0 and payoutBet > 0 then
-    local paid = payPayout(payoutBet * mult)
-    s_lastWin = true
-    s_lastPayout = paid
-    s_totalWin = s_totalWin + paid
-    
-    if checkPayoutLock() then return end
+    s_state="spinning"
+    s_grid = s_spinGrid()
+    sleep(0.5)
 
-    if mult >= 50 then
+    local mult, winningLines, freeSpinsWon = s_evaluateGrid(s_grid)
+
+    s_lastMult = mult
+    s_winLines = winningLines
+
+    if freeSpinsWon > 0 then
+      s_freeSpins = s_freeSpins + freeSpinsWon
+
       clearButtons()
       mclearRaw()
-      drawChrome("*** JACKPOT ***","")
-      
-      local msgY = math.floor(mh/2) - 4
-      
-      for i=1,6 do
-        drawBox(4,msgY,mw-3,msgY+8,colors.red)
-        
-        local col = (i % 2 == 1) and colors.yellow or colors.white
-        
-        mcenter(msgY+1,"# # # # # #",col,colors.red)
-        mcenter(msgY+3,"J A C K P O T !",col,colors.red)
-        mcenter(msgY+5,paid.." DIAMANTEN",colors.yellow,colors.red)
-        mcenter(msgY+7,"# # # # # #",col,colors.red)
-        
-        sleep(0.35)
+      drawChrome("FREE SPINS!","Du hast Freispiele gewonnen!")
+
+      local msgY = math.floor(mh/2) - 3
+
+      for i=1,5 do
+        drawBox(5,msgY,mw-4,msgY+6,colors.purple)
+
+        local col1 = (i % 2 == 1) and colors.yellow or colors.white
+        local col2 = (i % 2 == 1) and colors.white or colors.yellow
+
+        mcenter(msgY+1,"* * * * * *",col1,colors.purple)
+        mcenter(msgY+2,"FREE SPINS!",col2,colors.purple)
+        mcenter(msgY+3,"+"..freeSpinsWon.." Freispiele",col1,colors.purple)
+        mcenter(msgY+4,"Gesamt: "..s_freeSpins,col2,colors.purple)
+        mcenter(msgY+5,"* * * * * *",col1,colors.purple)
+
+        sleep(0.3)
       end
-      
-      sleep(2)
+
+      sleep(1)
     end
-  else
-    s_lastWin = false
-    s_lastPayout = 0
-  end
 
-  -- Statistik erfassen (nur bei echten Spins, nicht bei Freispielen)
-  -- Verwende s_player statt currentPlayer für korrekte Attribution
-  if s_player and cost > 0 then
-    updateGameStats(s_player, cost, s_lastWin, s_lastPayout)
-  end
+    local payoutBet
+    if isFreeSpin then
+      payoutBet = s_freeSpinBet
+    else
+      payoutBet = cost
+    end
 
-  s_state="result"
-  s_drawScreen()
+    if mult > 0 and payoutBet > 0 then
+      local paid = payPayout(payoutBet * mult)
+      s_lastWin = true
+      s_lastPayout = paid
+      s_totalWin = s_totalWin + paid
 
-  if s_freeSpins > 0 then
-    sleep(2.5)
-    s_doSpin()
-  else
-    s_freeSpinBet = 0
+      if checkPayoutLock() then return end
+
+      if mult >= 50 then
+        clearButtons()
+        mclearRaw()
+        drawChrome("*** JACKPOT ***","")
+
+        local msgY = math.floor(mh/2) - 4
+
+        for i=1,6 do
+          drawBox(4,msgY,mw-3,msgY+8,colors.red)
+
+          local col = (i % 2 == 1) and colors.yellow or colors.white
+
+          mcenter(msgY+1,"# # # # # #",col,colors.red)
+          mcenter(msgY+3,"J A C K P O T !",col,colors.red)
+          mcenter(msgY+5,paid.." DIAMANTEN",colors.yellow,colors.red)
+          mcenter(msgY+7,"# # # # # #",col,colors.red)
+
+          sleep(0.35)
+        end
+
+        sleep(2)
+      end
+    else
+      s_lastWin = false
+      s_lastPayout = 0
+    end
+
+    -- Statistik erfassen (nur bei echten Spins, nicht bei Freispielen)
+    -- Verwende s_player statt currentPlayer für korrekte Attribution
+    if s_player and cost > 0 then
+      updateGameStats(s_player, cost, s_lastWin, s_lastPayout)
+    end
+
+    s_state="result"
+    s_drawScreen()
+
+    -- Continue loop if there are free spins remaining, otherwise exit
+    if s_freeSpins > 0 then
+      sleep(2.5)
+      -- Loop continues for next free spin
+    else
+      s_freeSpinBet = 0
+      break  -- Exit loop when no more free spins
+    end
   end
 end
 
@@ -3009,6 +3155,12 @@ end
 ------------- SIMPLIFIED GAME STARTERS -------------
 
 local function drawRouletteSimple()
+  -- Issue #35: Safety check - ensure game is enabled
+  if not gameStatus.roulette then
+    mode = "menu"
+    drawMainMenu()
+    return
+  end
   r_state="type"
   r_betType, r_choice, r_stake = nil, nil, 0
   r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
@@ -3017,6 +3169,12 @@ local function drawRouletteSimple()
 end
 
 local function drawHiloSimple()
+  -- Issue #35: Safety check - ensure game is enabled
+  if not gameStatus.hilo then
+    mode = "menu"
+    drawMainMenu()
+    return
+  end
   h_state="stake"
   h_stake = 0
   h_startNum, h_nextNum, h_choice = nil, nil, nil
@@ -3026,6 +3184,12 @@ local function drawHiloSimple()
 end
 
 local function drawBlackjackSimple()
+  -- Issue #35: Safety check - ensure game is enabled
+  if not gameStatus.blackjack then
+    mode = "menu"
+    drawMainMenu()
+    return
+  end
   bj_state="stake"
   bj_stake = 0
   bj_playerHand, bj_dealerHand, bj_deck = {}, {}, {}
@@ -3035,6 +3199,12 @@ local function drawBlackjackSimple()
 end
 
 local function drawSlotsSimple()
+  -- Issue #35: Safety check - ensure game is enabled
+  if not gameStatus.slots then
+    mode = "menu"
+    drawMainMenu()
+    return
+  end
   s_state="setup"
   s_bet = 1
   s_grid = {{},{},{}}
@@ -3117,12 +3287,15 @@ end
 ------------- ERROR HANDLER -------------
 
 local function safeMain()
+    -- Issue #31: Make timer accessible for cleanup
+    local trackingTimer = nil
+
     local success, err = pcall(function()
         mode="menu"
         drawMainMenu()
 
         -- Tracking-Timer starten
-        local trackingTimer = os.startTimer(2)
+        trackingTimer = os.startTimer(2)
 
         -- Peripheral-Namen für Event-Vergleich speichern (nur wenn verfügbar)
         local monitorName = monitor and peripheral.getName(monitor) or nil
@@ -3157,6 +3330,20 @@ local function safeMain()
     end)
 
     if not success then
+        -- Issue #32: Cleanup on error before reboot
+        print("[ERROR] Kritischer Fehler aufgetreten: "..tostring(err))
+
+        -- Reset game lock to prevent stuck state
+        gameInProgress = false
+
+        -- Issue #31: Cancel tracking timer
+        if trackingTimer then
+            pcall(os.cancelTimer, trackingTimer)
+        end
+
+        -- Try to save player stats to prevent data loss
+        pcall(safeSavePlayerStats, "Error cleanup")
+
         -- Versuche Fehler auf Monitor anzuzeigen, falls noch verfügbar
         local displaySuccess, displayErr = pcall(function()
             local monName = monitor and peripheral.getName(monitor) or nil
