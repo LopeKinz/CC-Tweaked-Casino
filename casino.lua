@@ -1128,8 +1128,7 @@ local AdminState = {
     panelOpen = false,
     pinInput = "",
     currentStatsOffset = 0,
-    cameFromMainMenu = false,  -- Track if stats accessed from main menu
-    cameFromStatsOverview = false  -- FIXED BUG #2: Track if in financial overview sub-navigation
+    cameFromStatsOverview = false  -- Track if in financial overview sub-navigation
 }
 
 -- Game State Variables (grouped to reduce local count)
@@ -1310,10 +1309,9 @@ local function drawMainMenu()
     -- Row 3: Blackjack (full width)
     drawGameCard(GAME_CONFIG.blackjack, col1X, startY, col2X + colW, startY + btnH, gameStatus.blackjack)
 
-    -- Bottom buttons (Stats & Admin)
+    -- Bottom button (Admin only - Stats available via Admin panel)
     local btnY = mh - 2
-    addButton("player_stats", 3, btnY, math.floor(mw/2)-1, btnY, "STATS", colors.white, COLORS.INFO)
-    addButton("admin_panel", math.floor(mw/2)+1, btnY, mw-2, btnY, "ADMIN", colors.white, COLORS.ADMIN_BG)
+    addButton("admin_panel", 3, btnY, mw-2, btnY, "ADMIN", colors.white, COLORS.ADMIN_BG)
 end
 
 ------------- PLAYER SELECTION --------------
@@ -1897,21 +1895,11 @@ local function handleAdminButton(id)
             drawFinancialOverview()
 
         elseif id == "stats_back" then
-            -- FIXED BUG #2: Proper navigation based on entry point
-            if mode == "stats" then
-                -- We're in stats mode from main menu, return to main menu
-                mode = "menu"
-                AdminState.cameFromMainMenu = false
-                drawMainMenu()
-            elseif AdminState.cameFromStatsOverview then
+            -- Navigate back from stats based on entry point
+            if AdminState.cameFromStatsOverview then
                 -- We came from financial overview in admin mode, return there
                 AdminState.cameFromStatsOverview = false
                 drawFinancialOverview()
-            elseif AdminState.cameFromMainMenu then
-                -- We came from main menu via old path, return there
-                mode = "menu"
-                AdminState.cameFromMainMenu = false
-                drawMainMenu()
             elseif AdminState.panelOpen then
                 -- We came from admin panel, return there
                 drawAdminPanel()
@@ -3472,12 +3460,6 @@ local function handleButton(id)
             nextGameMode = "slots"
             mode = "player_select"
             drawPlayerSelection()
-        elseif id=="player_stats" then
-            -- FIXED BUG #2: Use separate mode "stats" for main menu stats access
-            mode="stats"
-            AdminState.cameFromMainMenu = true  -- Track that we came from main menu
-            AdminState.currentStatsOffset = 0
-            drawPlayerStatsList(0)
         elseif id=="admin_panel" then
             mode="admin"
             AdminState.pinInput = ""
@@ -3485,10 +3467,6 @@ local function handleButton(id)
         end
     
     elseif mode=="admin" then
-        handleAdminButton(id)
-
-    elseif mode=="stats" then
-        -- FIXED BUG #2: Stats mode from main menu uses same handlers as admin
         handleAdminButton(id)
 
     elseif mode=="player_select" then
