@@ -46,6 +46,15 @@ if not bridge then
     error("Keine meBridge/rsBridge gefunden!")
 end
 
+-- Player Detector suchen (links vom Computer)
+local playerDetector = peripheral.wrap("left")
+if playerDetector and playerDetector.getOnlinePlayers then
+    print("Player Detector gefunden: left")
+else
+    print("WARNUNG: Kein Player Detector auf 'left' gefunden!")
+    playerDetector = nil
+end
+
 print("Casino gestartet auf Monitor: " .. peripheral.getName(monitor))
 print("Monitor-Größe: " .. mw .. "x" .. mh)
 print("IO-Chest Richtung: " .. IO_CHEST_DIR)
@@ -172,6 +181,158 @@ local function hitButton(x,y)
     end
     return nil
 end
+
+----------- PLAYER STATISTIKEN ------------
+
+local STATS_FILE = "player_stats.dat"
+local playerStats = {}
+local lastSeenPlayers = {}
+
+-- Statistiken laden
+local function loadPlayerStats()
+    if not fs.exists(STATS_FILE) then
+        playerStats = {}
+        return
+    end
+    local file = fs.open(STATS_FILE, "r")
+    if file then
+        local content = file.readAll()
+        file.close()
+        playerStats = textutils.unserialize(content) or {}
+    end
+end
+
+-- Statistiken speichern
+local function savePlayerStats()
+    local file = fs.open(STATS_FILE, "w")
+    if file then
+        file.write(textutils.serialize(playerStats))
+        file.close()
+    end
+end
+
+-- Spieler-Statistik initialisieren oder abrufen
+local function getOrCreatePlayerStats(playerName)
+    if not playerStats[playerName] then
+        playerStats[playerName] = {
+            name = playerName,
+            firstSeen = os.epoch("utc"),
+            lastSeen = os.epoch("utc"),
+            totalVisits = 0,
+            totalTimeSpent = 0,
+            gamesPlayed = 0,
+            totalWagered = 0,
+            totalWon = 0,
+            totalLost = 0,
+            biggestWin = 0,
+            biggestLoss = 0,
+            currentStreak = 0,
+            longestWinStreak = 0,
+            longestLoseStreak = 0
+        }
+    end
+    return playerStats[playerName]
+end
+
+-- Spieler erfassen und tracken
+local function trackPlayers()
+    if not playerDetector then return end
+
+    local ok, playersInRange = pcall(playerDetector.getPlayersInRange, 10)
+    if not ok or not playersInRange then return end
+
+    local currentTime = os.epoch("utc")
+    local newSeenPlayers = {}
+
+    for _, player in ipairs(playersInRange) do
+        if player and player.name then
+            local playerName = player.name
+            newSeenPlayers[playerName] = true
+
+            local stats = getOrCreatePlayerStats(playerName)
+            stats.lastSeen = currentTime
+
+            -- Neuer Besuch?
+            if not lastSeenPlayers[playerName] then
+                stats.totalVisits = stats.totalVisits + 1
+            end
+        end
+    end
+
+    -- Zeit für alle aktuell gesehenen Spieler aktualisieren
+    for playerName, _ in pairs(newSeenPlayers) do
+        if lastSeenPlayers[playerName] then
+            local stats = playerStats[playerName]
+            if stats then
+                -- 1 Sekunde hinzufügen (wird alle 1-2 Sekunden aufgerufen)
+                stats.totalTimeSpent = stats.totalTimeSpent + 1000
+            end
+        end
+    end
+
+    lastSeenPlayers = newSeenPlayers
+    savePlayerStats()
+end
+
+-- Spiel-Statistik aktualisieren
+local function updateGameStats(playerName, wager, won, payout)
+    local stats = getOrCreatePlayerStats(playerName)
+    stats.gamesPlayed = stats.gamesPlayed + 1
+    stats.totalWagered = stats.totalWagered + wager
+
+    if won then
+        local profit = payout - wager
+        stats.totalWon = stats.totalWon + profit
+        if profit > stats.biggestWin then
+            stats.biggestWin = profit
+        end
+
+        if stats.currentStreak >= 0 then
+            stats.currentStreak = stats.currentStreak + 1
+        else
+            stats.currentStreak = 1
+        end
+
+        if stats.currentStreak > stats.longestWinStreak then
+            stats.longestWinStreak = stats.currentStreak
+        end
+    else
+        stats.totalLost = stats.totalLost + wager
+        if wager > stats.biggestLoss then
+            stats.biggestLoss = wager
+        end
+
+        if stats.currentStreak <= 0 then
+            stats.currentStreak = stats.currentStreak - 1
+        else
+            stats.currentStreak = -1
+        end
+
+        if math.abs(stats.currentStreak) > stats.longestLoseStreak then
+            stats.longestLoseStreak = math.abs(stats.currentStreak)
+        end
+    end
+
+    savePlayerStats()
+end
+
+-- Formatiere Zeit
+local function formatTime(milliseconds)
+    local seconds = math.floor(milliseconds / 1000)
+    local minutes = math.floor(seconds / 60)
+    local hours = math.floor(minutes / 60)
+
+    if hours > 0 then
+        return string.format("%dh %dm", hours, minutes % 60)
+    elseif minutes > 0 then
+        return string.format("%dm %ds", minutes, seconds % 60)
+    else
+        return string.format("%ds", seconds)
+    end
+end
+
+-- Statistiken laden beim Start
+loadPlayerStats()
 
 ----------- INVENTAR / STORAGE ------------
 
@@ -536,6 +697,125 @@ local function drawAdminPinEntry()
     addButton("admin_cancel",3,mh-3,mw-2,mh-2,"<< Abbrechen",colors.white,COLOR_WARNING)
 end
 
+-- Spieler-Statistiken Liste
+local function drawPlayerStatsList(offset)
+    clearButtons()
+    drawChrome("Spieler-Statistiken","Alle erfassten Spieler")
+
+    -- Spieler sortieren nach Gesamtzeit
+    local sortedPlayers = {}
+    for name, stats in pairs(playerStats) do
+        table.insert(sortedPlayers, {name = name, stats = stats})
+    end
+    table.sort(sortedPlayers, function(a, b)
+        return a.stats.totalTimeSpent > b.stats.totalTimeSpent
+    end)
+
+    local totalPlayers = #sortedPlayers
+
+    if totalPlayers == 0 then
+        drawBox(4,5,mw-3,10,COLOR_PANEL_DARK)
+        mcenter(7,"Keine Spieler erfasst",colors.lightGray,COLOR_PANEL_DARK)
+        mcenter(8,"Stelle Player Detector auf",colors.lightGray,COLOR_PANEL_DARK)
+        addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
+        return
+    end
+
+    drawBox(4,4,mw-3,6,COLOR_PANEL_DARK)
+    mcenter(5,"Gesamt: "..totalPlayers.." Spieler",COLOR_GOLD,COLOR_PANEL_DARK)
+
+    local startY = 8
+    local maxVisible = math.min(6, totalPlayers)
+
+    for i = 1, maxVisible do
+        local player = sortedPlayers[i]
+        if player then
+            local btnY = startY + (i-1)*3
+            local stats = player.stats
+            local timeStr = formatTime(stats.totalTimeSpent)
+            local winRate = stats.gamesPlayed > 0 and math.floor((stats.totalWon / (stats.totalWon + stats.totalLost)) * 100) or 0
+
+            local label = player.name.."\n"..stats.gamesPlayed.." Spiele | "..timeStr
+            local btnColor = COLOR_PANEL
+            if stats.currentStreak > 0 then
+                btnColor = colors.green
+            elseif stats.currentStreak < 0 then
+                btnColor = colors.red
+            end
+
+            addButton("stats_player_"..player.name, 4, btnY, mw-3, btnY+2, label, colors.white, btnColor)
+        end
+    end
+
+    addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
+end
+
+-- Detail-Ansicht eines Spielers
+local function drawPlayerStatsDetail(playerName)
+    clearButtons()
+    local stats = playerStats[playerName]
+
+    if not stats then
+        drawChrome("Fehler","Spieler nicht gefunden")
+        drawBox(4,8,mw-3,12,COLOR_WARNING)
+        mcenter(10,"Spieler nicht gefunden!",colors.white,COLOR_WARNING)
+        sleep(1.5)
+        drawPlayerStatsList(0)
+        return
+    end
+
+    drawChrome("Spieler: "..playerName,"Detaillierte Statistiken")
+
+    drawBox(4,4,mw-3,mh-5,COLOR_PANEL_DARK)
+
+    local y = 5
+    mcenter(y,"=== "..playerName.." ===",COLOR_GOLD,COLOR_PANEL_DARK); y = y + 2
+
+    mwrite(6,y,"Besuche:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,tostring(stats.totalVisits),colors.white,COLOR_PANEL_DARK); y = y + 1
+
+    mwrite(6,y,"Zeit:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,formatTime(stats.totalTimeSpent),colors.white,COLOR_PANEL_DARK); y = y + 1
+
+    mwrite(6,y,"Spiele:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,tostring(stats.gamesPlayed),colors.white,COLOR_PANEL_DARK); y = y + 2
+
+    mwrite(6,y,"Gesetzt:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.totalWagered.." Dia",COLOR_INFO,COLOR_PANEL_DARK); y = y + 1
+
+    local netProfit = stats.totalWon - stats.totalLost
+    local profitColor = netProfit >= 0 and COLOR_SUCCESS or COLOR_WARNING
+    mwrite(6,y,"Netto:",colors.lightGray,COLOR_PANEL_DARK)
+    local netText = netProfit >= 0 and "+"..netProfit or tostring(netProfit)
+    mwrite(mw-15,y,netText.." Dia",profitColor,COLOR_PANEL_DARK); y = y + 2
+
+    mwrite(6,y,"Groesster Gewinn:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.biggestWin.." Dia",COLOR_SUCCESS,COLOR_PANEL_DARK); y = y + 1
+
+    mwrite(6,y,"Groesster Verlust:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.biggestLoss.." Dia",COLOR_WARNING,COLOR_PANEL_DARK); y = y + 2
+
+    local streakText = ""
+    local streakColor = colors.white
+    if stats.currentStreak > 0 then
+        streakText = "+"..stats.currentStreak.." Siege"
+        streakColor = COLOR_SUCCESS
+    elseif stats.currentStreak < 0 then
+        streakText = math.abs(stats.currentStreak).." Niederlagen"
+        streakColor = COLOR_WARNING
+    else
+        streakText = "Keine aktive Serie"
+        streakColor = colors.lightGray
+    end
+    mwrite(6,y,"Aktuelle Serie:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-25,y,streakText,streakColor,COLOR_PANEL_DARK); y = y + 1
+
+    mwrite(6,y,"Beste Serie:",colors.lightGray,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.longestWinStreak.." Siege",colors.white,COLOR_PANEL_DARK); y = y + 1
+
+    addButton("player_detail_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
+end
+
 local function drawAdminPanel()
     clearButtons()
     drawChrome("Admin-Panel","Geschuetzter Bereich")
@@ -687,27 +967,40 @@ local function handleAdminButton(id)
         elseif id == "admin_stats" then
             clearButtons()
             drawChrome("Statistiken","Casino-Uebersicht")
-            
+
             local playerDia = getPlayerBalance()
             local bankDia = getItemCountInNet(DIAMOND_ID)
             local profit = bankDia - 500
-            
-            drawBox(4,5,mw-3,16,COLOR_PANEL_DARK)
+
+            drawBox(4,5,mw-3,13,COLOR_PANEL_DARK)
             mcenter(6,"=== FINANZEN ===",COLOR_GOLD,COLOR_PANEL_DARK)
             mcenter(8,"Spieler-Chips: "..playerDia,COLOR_INFO,COLOR_PANEL_DARK)
             mcenter(9,"Casino-Bank: "..bankDia,COLOR_SUCCESS,COLOR_PANEL_DARK)
-            
+
             local profitColor = profit >= 0 and COLOR_SUCCESS or COLOR_WARNING
             local profitText = profit >= 0 and "+"..profit or tostring(profit)
-            mcenter(11,"Gewinn/Verlust:",colors.white,COLOR_PANEL_DARK)
-            mcenter(12,profitText.." Diamanten",profitColor,COLOR_PANEL_DARK)
-            mcenter(14,"(seit Start mit 500 Bank)",colors.lightGray,COLOR_PANEL_DARK)
-            
+            mcenter(11,"Gewinn/Verlust: "..profitText.." Dia",profitColor,COLOR_PANEL_DARK)
+            mcenter(12,"(seit Start mit 500 Bank)",colors.lightGray,COLOR_PANEL_DARK)
+
+            addButton("stats_players",4,15,mw-3,17,"Spieler-Statistiken",colors.black,colors.cyan)
             addButton("stats_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_PANEL)
             
         elseif id == "stats_back" then
             drawAdminPanel()
-            
+
+        elseif id == "stats_players" then
+            drawPlayerStatsList(0)
+
+        elseif id:match("^stats_player_") then
+            local playerName = id:match("^stats_player_(.+)$")
+            drawPlayerStatsDetail(playerName)
+
+        elseif id == "player_stats_list" then
+            drawPlayerStatsList(0)
+
+        elseif id == "player_detail_back" then
+            drawPlayerStatsList(0)
+
         elseif id == "admin_close" then
             admin_panel_open = false
             mode="menu"
@@ -2059,11 +2352,23 @@ local function safeMain()
     local success, err = pcall(function()
         mode="menu"
         drawMainMenu()
+
+        -- Tracking-Timer starten
+        local trackingTimer = os.startTimer(2)
+
         while true do
-            local e,side,x,y = os.pullEvent("monitor_touch")
-            if side == peripheral.getName(monitor) then
-                local id = hitButton(x,y)
-                if id then handleButton(id) end
+            local e, param1, x, y = os.pullEvent()
+
+            if e == "monitor_touch" then
+                local side = param1
+                if side == peripheral.getName(monitor) then
+                    local id = hitButton(x,y)
+                    if id then handleButton(id) end
+                end
+            elseif e == "timer" and param1 == trackingTimer then
+                -- Spieler tracken alle 2 Sekunden
+                trackPlayers()
+                trackingTimer = os.startTimer(2)
             end
         end
     end)
