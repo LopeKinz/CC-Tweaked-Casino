@@ -880,6 +880,15 @@ local function takeStake(amount)
 
     local result = imported or 0
     print("[EINSATZ] Genommen:", result)
+
+    -- If partial import occurred, refund the partial amount to prevent diamond loss
+    if result > 0 and result < amount then
+        print("[WARNUNG] Partial import detected! Nehme "..result.." statt "..amount)
+        print("[REFUND] Erstatte partial stake von "..result.." Diamanten zurueck")
+        rawExportDiamonds(result)
+        return 0  -- Return 0 to indicate stake taking failed
+    end
+
     return result
 end
 
@@ -2363,7 +2372,8 @@ local function h_doRound()
   end
 
   -- Statistik erfassen (verwende h_player statt currentPlayer für korrekte Attribution)
-  if h_player then
+  -- Don't count pushes (ties) as games played
+  if h_player and not push then
     updateGameStats(h_player, h_stake, h_lastWin, h_lastPayout)
   end
 
@@ -2416,6 +2426,9 @@ local function bj_shuffleDeck(deck)
 end
 
 local function bj_drawCard(deck)
+  if #deck == 0 then
+    error("Blackjack deck is empty! This should not happen.")
+  end
   return table.remove(deck)
 end
 
@@ -2918,128 +2931,133 @@ local function s_doSpin()
     s_player = currentPlayer
   end
 
-  local playerDia = getPlayerBalance()
-  local isFreeSpin = (s_freeSpins > 0)
-  local cost = isFreeSpin and 0 or s_bet
-  
-  if cost > 0 and playerDia < cost then
-    clearButtons()
-    drawChrome("Slots","Nicht genug Guthaben")
-    drawBox(5,6,mw-4,10,COLOR_WARNING)
-    mcenter(7,"Zu wenig Diamanten!",colors.white,COLOR_WARNING)
-    mcenter(8,"Guthaben: "..playerDia.." | Bedarf: "..cost,colors.white,COLOR_WARNING)
-    addButton("s_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
-    s_state="setup"
-    return
-  end
+  -- Use while loop instead of recursion to prevent stack overflow
+  while true do
+    local playerDia = getPlayerBalance()
+    local isFreeSpin = (s_freeSpins > 0)
+    local cost = isFreeSpin and 0 or s_bet
 
-  if cost > 0 then
-    local taken = takeStake(cost)
-    if taken < cost then
-      s_lastWin=false; s_lastPayout=0
+    if cost > 0 and playerDia < cost then
+      clearButtons()
+      drawChrome("Slots","Nicht genug Guthaben")
+      drawBox(5,6,mw-4,10,COLOR_WARNING)
+      mcenter(7,"Zu wenig Diamanten!",colors.white,COLOR_WARNING)
+      mcenter(8,"Guthaben: "..playerDia.." | Bedarf: "..cost,colors.white,COLOR_WARNING)
+      addButton("s_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_WARNING)
       s_state="setup"
-      drawMainMenu()
       return
     end
-    s_freeSpinBet = cost
-  end
-  
-  if isFreeSpin then
-    s_freeSpins = s_freeSpins - 1
-  end
 
-  s_state="spinning"
-  s_grid = s_spinGrid()
-  sleep(0.5)
-  
-  local mult, winningLines, freeSpinsWon = s_evaluateGrid(s_grid)
-  
-  s_lastMult = mult
-  s_winLines = winningLines
-  
-  if freeSpinsWon > 0 then
-    s_freeSpins = s_freeSpins + freeSpinsWon
-    
-    clearButtons()
-    mclearRaw()
-    drawChrome("FREE SPINS!","Du hast Freispiele gewonnen!")
-    
-    local msgY = math.floor(mh/2) - 3
-    
-    for i=1,5 do
-      drawBox(5,msgY,mw-4,msgY+6,colors.purple)
-      
-      local col1 = (i % 2 == 1) and colors.yellow or colors.white
-      local col2 = (i % 2 == 1) and colors.white or colors.yellow
-      
-      mcenter(msgY+1,"* * * * * *",col1,colors.purple)
-      mcenter(msgY+2,"FREE SPINS!",col2,colors.purple)
-      mcenter(msgY+3,"+"..freeSpinsWon.." Freispiele",col1,colors.purple)
-      mcenter(msgY+4,"Gesamt: "..s_freeSpins,col2,colors.purple)
-      mcenter(msgY+5,"* * * * * *",col1,colors.purple)
-      
-      sleep(0.3)
+    if cost > 0 then
+      local taken = takeStake(cost)
+      if taken < cost then
+        s_lastWin=false; s_lastPayout=0
+        s_state="setup"
+        drawMainMenu()
+        return
+      end
+      s_freeSpinBet = cost
     end
-    
-    sleep(1)
-  end
 
-  local payoutBet
-  if isFreeSpin then
-    payoutBet = s_freeSpinBet
-  else
-    payoutBet = cost
-  end
+    if isFreeSpin then
+      s_freeSpins = s_freeSpins - 1
+    end
 
-  if mult > 0 and payoutBet > 0 then
-    local paid = payPayout(payoutBet * mult)
-    s_lastWin = true
-    s_lastPayout = paid
-    s_totalWin = s_totalWin + paid
-    
-    if checkPayoutLock() then return end
+    s_state="spinning"
+    s_grid = s_spinGrid()
+    sleep(0.5)
 
-    if mult >= 50 then
+    local mult, winningLines, freeSpinsWon = s_evaluateGrid(s_grid)
+
+    s_lastMult = mult
+    s_winLines = winningLines
+
+    if freeSpinsWon > 0 then
+      s_freeSpins = s_freeSpins + freeSpinsWon
+
       clearButtons()
       mclearRaw()
-      drawChrome("*** JACKPOT ***","")
-      
-      local msgY = math.floor(mh/2) - 4
-      
-      for i=1,6 do
-        drawBox(4,msgY,mw-3,msgY+8,colors.red)
-        
-        local col = (i % 2 == 1) and colors.yellow or colors.white
-        
-        mcenter(msgY+1,"# # # # # #",col,colors.red)
-        mcenter(msgY+3,"J A C K P O T !",col,colors.red)
-        mcenter(msgY+5,paid.." DIAMANTEN",colors.yellow,colors.red)
-        mcenter(msgY+7,"# # # # # #",col,colors.red)
-        
-        sleep(0.35)
+      drawChrome("FREE SPINS!","Du hast Freispiele gewonnen!")
+
+      local msgY = math.floor(mh/2) - 3
+
+      for i=1,5 do
+        drawBox(5,msgY,mw-4,msgY+6,colors.purple)
+
+        local col1 = (i % 2 == 1) and colors.yellow or colors.white
+        local col2 = (i % 2 == 1) and colors.white or colors.yellow
+
+        mcenter(msgY+1,"* * * * * *",col1,colors.purple)
+        mcenter(msgY+2,"FREE SPINS!",col2,colors.purple)
+        mcenter(msgY+3,"+"..freeSpinsWon.." Freispiele",col1,colors.purple)
+        mcenter(msgY+4,"Gesamt: "..s_freeSpins,col2,colors.purple)
+        mcenter(msgY+5,"* * * * * *",col1,colors.purple)
+
+        sleep(0.3)
       end
-      
-      sleep(2)
+
+      sleep(1)
     end
-  else
-    s_lastWin = false
-    s_lastPayout = 0
-  end
 
-  -- Statistik erfassen (nur bei echten Spins, nicht bei Freispielen)
-  -- Verwende s_player statt currentPlayer für korrekte Attribution
-  if s_player and cost > 0 then
-    updateGameStats(s_player, cost, s_lastWin, s_lastPayout)
-  end
+    local payoutBet
+    if isFreeSpin then
+      payoutBet = s_freeSpinBet
+    else
+      payoutBet = cost
+    end
 
-  s_state="result"
-  s_drawScreen()
+    if mult > 0 and payoutBet > 0 then
+      local paid = payPayout(payoutBet * mult)
+      s_lastWin = true
+      s_lastPayout = paid
+      s_totalWin = s_totalWin + paid
 
-  if s_freeSpins > 0 then
-    sleep(2.5)
-    s_doSpin()
-  else
-    s_freeSpinBet = 0
+      if checkPayoutLock() then return end
+
+      if mult >= 50 then
+        clearButtons()
+        mclearRaw()
+        drawChrome("*** JACKPOT ***","")
+
+        local msgY = math.floor(mh/2) - 4
+
+        for i=1,6 do
+          drawBox(4,msgY,mw-3,msgY+8,colors.red)
+
+          local col = (i % 2 == 1) and colors.yellow or colors.white
+
+          mcenter(msgY+1,"# # # # # #",col,colors.red)
+          mcenter(msgY+3,"J A C K P O T !",col,colors.red)
+          mcenter(msgY+5,paid.." DIAMANTEN",colors.yellow,colors.red)
+          mcenter(msgY+7,"# # # # # #",col,colors.red)
+
+          sleep(0.35)
+        end
+
+        sleep(2)
+      end
+    else
+      s_lastWin = false
+      s_lastPayout = 0
+    end
+
+    -- Statistik erfassen (nur bei echten Spins, nicht bei Freispielen)
+    -- Verwende s_player statt currentPlayer für korrekte Attribution
+    if s_player and cost > 0 then
+      updateGameStats(s_player, cost, s_lastWin, s_lastPayout)
+    end
+
+    s_state="result"
+    s_drawScreen()
+
+    -- Continue loop if there are free spins remaining, otherwise exit
+    if s_freeSpins > 0 then
+      sleep(2.5)
+      -- Loop continues for next free spin
+    else
+      s_freeSpinBet = 0
+      break  -- Exit loop when no more free spins
+    end
   end
 end
 
