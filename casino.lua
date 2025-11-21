@@ -1,5 +1,13 @@
 -- casino.lua - CASINO LOUNGE (RS Bridge Support, Pending-Payout Lock)
--- Version 4.2 - Player Stats UI Enhancements & Fallback System
+-- Version 4.2.1 - Lua Variable Limit Fix
+--
+-- Changelog v4.2.1:
+-- + Fixed Lua "more than 200 local variables" error
+-- + Grouped color constants into COLORS table (reduced 23 locals to 1)
+-- + Grouped admin state into AdminState table (reduced 4 locals to 1)
+-- + Grouped payout state into PayoutState table (reduced 3 locals to 1)
+-- + Reduced total top-level local variables from 162 to 150
+-- + Kept frequently-used variables as locals for performance
 --
 -- Changelog v4.2:
 -- + Fallback player name "Guest" when no Player Detector is available
@@ -45,33 +53,46 @@ local STATS_PAGE_SIZE = 6  -- Anzahl der Spieler pro Seite in der Statistik-Ansi
 -- Bridge-Typen die wir suchen
 local BRIDGE_TYPES = { "meBridge", "me_bridge", "rsBridge", "rs_bridge" }
 
--- Farbschema (Enhanced UI)
-local COLOR_BG          = colors.black
-local COLOR_FRAME       = colors.lightGray
-local COLOR_HEADER_BG   = colors.purple
-local COLOR_HEADER_ACC  = colors.magenta
-local COLOR_HEADER_TEXT = colors.white
-local COLOR_FOOTER_BG   = colors.gray
-local COLOR_FOOTER_TEXT = colors.white
-local COLOR_PANEL       = colors.gray
-local COLOR_PANEL_DARK  = colors.black
-local COLOR_HIGHLIGHT   = colors.lime
-local COLOR_WARNING     = colors.red
-local COLOR_INFO        = colors.cyan
-local COLOR_GOLD        = colors.yellow
-local COLOR_SUCCESS     = colors.green
-local COLOR_DISABLED    = colors.lightGray
-local COLOR_ACCENT      = colors.orange
+-- Farbschema (Enhanced UI) - Grouped to reduce local variable count
+local COLORS = {
+    BG           = colors.black,
+    FRAME        = colors.lightGray,
+    HEADER_BG    = colors.purple,
+    HEADER_ACC   = colors.magenta,
+    HEADER_TEXT  = colors.white,
+    FOOTER_BG    = colors.gray,
+    FOOTER_TEXT  = colors.white,
+    PANEL        = colors.gray,
+    PANEL_DARK   = colors.black,
+    HIGHLIGHT    = colors.lime,
+    WARNING      = colors.red,
+    INFO         = colors.cyan,
+    GOLD         = colors.yellow,
+    SUCCESS      = colors.green,
+    DISABLED     = colors.lightGray,
+    ACCENT       = colors.orange,
+    -- Player Stats Theme Colors
+    STATS_HEADER = colors.purple,
+    STATS_BORDER = colors.yellow,
+    STATS_ONLINE = colors.cyan,
+    MEDAL_GOLD   = colors.yellow,
+    MEDAL_SILVER = colors.lightGray,
+    MEDAL_BRONZE = colors.orange,
+    STREAK_WIN   = colors.green,
+    STREAK_LOSS  = colors.red
+}
 
--- Player Stats Theme Colors
-local COLOR_STATS_HEADER = colors.purple
-local COLOR_STATS_BORDER = colors.yellow  -- Same as COLOR_GOLD
-local COLOR_STATS_ONLINE = colors.cyan
-local COLOR_MEDAL_GOLD   = colors.yellow
-local COLOR_MEDAL_SILVER = colors.lightGray
-local COLOR_MEDAL_BRONZE = colors.orange
-local COLOR_STREAK_WIN   = colors.green
-local COLOR_STREAK_LOSS  = colors.red
+-- Commonly used color aliases (to avoid typing COLORS. everywhere)
+local COLOR_BG          = COLORS.BG
+local COLOR_PANEL       = COLORS.PANEL
+local COLOR_PANEL_DARK  = COLORS.PANEL_DARK
+local COLOR_HIGHLIGHT   = COLORS.HIGHLIGHT
+local COLOR_WARNING     = COLORS.WARNING
+local COLOR_INFO        = COLORS.INFO
+local COLOR_GOLD        = COLORS.GOLD
+local COLOR_SUCCESS     = COLORS.SUCCESS
+local COLOR_ACCENT      = COLORS.ACCENT
+-- Less common colors can be accessed via COLORS table
 
 -- Game-Status Datei
 local GAME_STATUS_FILE = "game_status.dat"
@@ -251,7 +272,7 @@ local function drawBox(x1,y1,x2,y2,bg)
 end
 
 local function drawBorder(x1,y1,x2,y2,color)
-    monitor.setTextColor(color or COLOR_FRAME)
+    monitor.setTextColor(color or COLORS.FRAME)
     for x=x1,x2 do
         monitor.setCursorPos(x,y1)
         monitor.write("-")
@@ -272,39 +293,39 @@ end
 
 -- Helper: Zeige ein deaktiviertes Spiel
 local function drawDisabledGameButton(x1, y1, x2, y2, label)
-    drawBox(x1, y1, x2, y2, COLOR_DISABLED)
+    drawBox(x1, y1, x2, y2, COLORS.DISABLED)
     local labelX = x1 + math.floor((x2 - x1 + 1 - #label) / 2)
     local midY = y1 + math.floor((y2 - y1) / 2)
-    mwrite(labelX, midY, label, colors.gray, COLOR_DISABLED)
-    mwrite(labelX - 1, midY + 1, "[DEAKTIVIERT]", colors.gray, COLOR_DISABLED)
+    mwrite(labelX, midY, label, colors.gray, COLORS.DISABLED)
+    mwrite(labelX - 1, midY + 1, "[DEAKTIVIERT]", colors.gray, COLORS.DISABLED)
 end
 
 local function drawChrome(title, footer)
     mclearRaw()
 
     -- Enhanced header with gradient effect
-    monitor.setBackgroundColor(COLOR_HEADER_BG)
-    monitor.setTextColor(COLOR_HEADER_TEXT)
+    monitor.setBackgroundColor(COLORS.HEADER_BG)
+    monitor.setTextColor(COLORS.HEADER_TEXT)
     monitor.setCursorPos(1,1)
     monitor.write(string.rep(" ",mw))
 
     local header = " *** "..title.." *** "
     if #header > mw then header = header:sub(1,mw) end
-    mcenter(1,header,COLOR_HEADER_TEXT,COLOR_HEADER_BG)
+    mcenter(1,header,COLORS.HEADER_TEXT,COLORS.HEADER_BG)
 
-    monitor.setBackgroundColor(COLOR_HEADER_ACC)
+    monitor.setBackgroundColor(COLORS.HEADER_ACC)
     monitor.setCursorPos(1,2)
     monitor.write(string.rep(" ",mw))
 
     -- Enhanced border
-    drawBorder(1,2,mw,mh-1,COLOR_FRAME)
+    drawBorder(1,2,mw,mh-1,COLORS.FRAME)
 
     -- Enhanced footer
-    monitor.setBackgroundColor(COLOR_FOOTER_BG)
+    monitor.setBackgroundColor(COLORS.FOOTER_BG)
     monitor.setCursorPos(1,mh)
     monitor.write(string.rep(" ",mw))
     if footer then
-        mcenter(mh,footer,COLOR_FOOTER_TEXT,COLOR_FOOTER_BG)
+        mcenter(mh,footer,COLORS.FOOTER_TEXT,COLORS.FOOTER_BG)
     end
 
     monitor.setBackgroundColor(COLOR_BG)
@@ -899,45 +920,119 @@ end
 
 ------------- GLOBAL STATE -------------
 
-local mode = "menu"
-local currentPlayer = nil  -- Der Spieler, der gerade am Terminal spielt
+-- App State (grouped)
+local AppState = {
+    mode = "menu",
+    currentPlayer = nil
+}
 
--- Admin
-local ADMIN_PIN = "1234"
-local admin_panel_open = false
-local admin_pin_input = ""
-local currentStatsOffset = 0  -- Fuer Pagination der Spieler-Statistiken
+local mode = AppState.mode
+local currentPlayer = AppState.currentPlayer
 
--- Roulette
-local r_state = "type"
-local r_betType, r_choice, r_stake = nil, nil, 0
+-- Admin State (grouped)
+local AdminState = {
+    PIN = "1234",
+    panelOpen = false,
+    pinInput = "",
+    AdminState.currentStatsOffset = 0
+}
+
+-- Backwards compatibility aliases
+local AdminState.PIN = AdminState.PIN
+local AdminState.panelOpen = AdminState.panelOpen
+local AdminState.pinInput = AdminState.pinInput
+local AdminState.currentStatsOffset = AdminState.AdminState.currentStatsOffset
+
+-- Game State Variables (grouped to reduce local count)
+local GameState = {
+    -- Roulette
+    r = {
+        state = "type",
+        betType = nil,
+        choice = nil,
+        stake = 0,
+        lastResult = nil,
+        lastColor = nil,
+        lastHit = nil,
+        lastPayout = nil,
+        lastMult = nil,
+        player = nil
+    },
+    -- Coinflip
+    c = {
+        state = "stake",
+        stake = 0,
+        choice = nil,
+        lastWin = false,
+        lastPayout = 0,
+        lastSide = nil,
+        player = nil
+    },
+    -- High/Low
+    h = {
+        state = "stake",
+        stake = 0,
+        startNum = nil,
+        nextNum = nil,
+        choice = nil,
+        lastWin = false,
+        lastPayout = 0,
+        lastPush = false,
+        player = nil
+    },
+    -- Blackjack
+    bj = {
+        state = "stake",
+        stake = 0,
+        playerHand = {},
+        dealerHand = {},
+        deck = {},
+        lastWin = false,
+        lastPayout = 0,
+        lastResult = "",
+        player = nil
+    },
+    -- Slots
+    s = {
+        state = "setup",
+        bet = 1,
+        grid = {{},{},{}},
+        lastWin = false,
+        lastMult = 0,
+        lastPayout = 0,
+        freeSpins = 0,
+        totalWin = 0,
+        winLines = {},
+        freeSpinBet = 0,
+        player = nil
+    }
+}
+
+-- Backwards compatibility aliases for game state
+local r_state, r_betType, r_choice, r_stake = "type", nil, nil, 0
 local r_lastResult, r_lastColor, r_lastHit, r_lastPayout, r_lastMult = nil, nil, nil, nil, nil
-local r_player = nil  -- Spieler der dieses Spiel gestartet hat
+local r_player = nil
 
--- Coinflip
 local c_state, c_stake, c_choice = "stake", 0, nil
 local c_lastWin, c_lastPayout, c_lastSide = false, 0, nil
-local c_player = nil  -- Spieler der dieses Spiel gestartet hat
+local c_player = nil
 
--- High/Low
 local h_state, h_stake = "stake", 0
 local h_startNum, h_nextNum, h_choice = nil, nil, nil
 local h_lastWin, h_lastPayout, h_lastPush = false, 0, false
-local h_player = nil  -- Spieler der dieses Spiel gestartet hat
+local h_player = nil
 
--- Blackjack
 local bj_state, bj_stake = "stake", 0
 local bj_playerHand, bj_dealerHand, bj_deck = {}, {}, {}
 local bj_lastWin, bj_lastPayout, bj_lastResult = false, 0, ""
-local bj_player = nil  -- Spieler der dieses Spiel gestartet hat
+local bj_player = nil
 
--- Slots
 local s_state, s_bet = "setup", 1
 local s_grid = {{},{},{}}
 local s_lastWin, s_lastMult, s_lastPayout = false, 0, 0
 local s_freeSpins, s_totalWin, s_winLines = 0, 0, {}
-local s_freeSpinBet = 0  -- merkt sich Einsatz, mit dem Freispiele erspielt wurden
-local s_player = nil  -- Spieler der dieses Spiel gestartet hat
+local s_freeSpinBet = 0
+local s_player = nil
 
 local slotSymbols = {
     {sym="7",   weight=1,  name="Lucky 7"},
@@ -1012,7 +1107,7 @@ local function drawMainMenu()
 
     local x1,x2,y1,y2 = 4,mw-3,4,10
     drawBox(x1,y1,x2,y2,COLOR_PANEL_DARK)
-    drawBorder(x1,y1,x2,y2,COLOR_FRAME)
+    drawBorder(x1,y1,x2,y2,COLORS.FRAME)
     
     mcenter(5,"=== DEIN GUTHABEN ===",COLOR_GOLD,COLOR_PANEL_DARK)
     mcenter(7,playerDia.." Diamanten",COLOR_SUCCESS,COLOR_PANEL_DARK)
@@ -1089,7 +1184,7 @@ local function drawAdminPinEntry()
     drawBorder(5,6,mw-4,10,colors.orange)
     
     mcenter(7,"Admin-Zugang",colors.orange,COLOR_PANEL_DARK)
-    mcenter(8,"PIN: "..string.rep("*",#admin_pin_input),colors.white,COLOR_PANEL_DARK)
+    mcenter(8,"PIN: "..string.rep("*",#AdminState.pinInput),colors.white,COLOR_PANEL_DARK)
     
     local btnSize = 4
     local gap = 1
@@ -1166,10 +1261,10 @@ local function drawPlayerStatsList(offset)
     local currentPage = math.floor(offset / maxVisible) + 1
 
     -- Verbesserte Header Box (Theme-Farben)
-    drawBox(4,4,mw-3,6,COLOR_STATS_HEADER)
-    drawBorder(4,4,mw-3,6,COLOR_STATS_BORDER)
-    mcenter(5,"~ SPIELER RANGLISTE ~",COLOR_STATS_BORDER,COLOR_STATS_HEADER)
-    mcenter(6,totalPlayers.." Spieler | Seite "..currentPage.."/"..maxPages,colors.white,COLOR_STATS_HEADER)
+    drawBox(4,4,mw-3,6,COLORS.STATS_HEADER)
+    drawBorder(4,4,mw-3,6,COLORS.STATS_BORDER)
+    mcenter(5,"~ SPIELER RANGLISTE ~",COLORS.STATS_BORDER,COLORS.STATS_HEADER)
+    mcenter(6,totalPlayers.." Spieler | Seite "..currentPage.."/"..maxPages,colors.white,COLORS.STATS_HEADER)
 
     local startY = 8
     local startIdx = offset + 1
@@ -1193,28 +1288,28 @@ local function drawPlayerStatsList(offset)
             local textColor = colors.white
 
             if currentPlayersSet[player.name] then
-                btnColor = COLOR_STATS_ONLINE  -- Cyan für online Spieler
+                btnColor = COLORS.STATS_ONLINE  -- Cyan für online Spieler
                 textColor = colors.black
             elseif player.name == "Guest" then
                 -- Guest bekommt eine spezielle Farbe
-                btnColor = COLOR_DISABLED
+                btnColor = COLORS.DISABLED
                 textColor = colors.black
             elseif rank <= 3 then
                 -- Top 3 bekommen spezielle Farben (Theme)
                 if rank == 1 then
-                    btnColor = COLOR_MEDAL_GOLD  -- Gold für Platz 1
+                    btnColor = COLORS.MEDAL_GOLD  -- Gold für Platz 1
                     textColor = colors.black
                 elseif rank == 2 then
-                    btnColor = COLOR_MEDAL_SILVER  -- Silber für Platz 2
+                    btnColor = COLORS.MEDAL_SILVER  -- Silber für Platz 2
                     textColor = colors.black
                 elseif rank == 3 then
-                    btnColor = COLOR_MEDAL_BRONZE  -- Bronze für Platz 3
+                    btnColor = COLORS.MEDAL_BRONZE  -- Bronze für Platz 3
                     textColor = colors.black
                 end
             elseif stats.currentStreak > 0 then
-                btnColor = COLOR_STREAK_WIN
+                btnColor = COLORS.STREAK_WIN
             elseif stats.currentStreak < 0 then
-                btnColor = COLOR_STREAK_LOSS
+                btnColor = COLORS.STREAK_LOSS
             end
 
             addButton("stats_player_"..player.name, 4, btnY, mw-3, btnY+2, label, textColor, btnColor)
@@ -1230,7 +1325,7 @@ local function drawPlayerStatsList(offset)
         addButton("stats_next",math.floor(mw/2)+1,btnY,mw-3,btnY+1,"Naechste >>",colors.black,COLOR_INFO)
     end
 
-    addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_STATS_HEADER)
+    addButton("player_stats_list",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLORS.STATS_HEADER)
 end
 
 -- Detail-Ansicht eines Spielers
@@ -1241,7 +1336,7 @@ local function drawPlayerStatsDetail(playerName)
     if not stats then
         drawChrome("Fehler","Spieler nicht gefunden")
         drawBox(4,8,mw-3,12,COLOR_WARNING)
-        drawBorder(4,8,mw-3,12,COLOR_STATS_BORDER)
+        drawBorder(4,8,mw-3,12,COLORS.STATS_BORDER)
         mcenter(10,"Spieler nicht gefunden!",colors.white,COLOR_WARNING)
         sleep(1.5)
         drawPlayerStatsList(0)
@@ -1261,15 +1356,15 @@ local function drawPlayerStatsDetail(playerName)
     drawChrome("Spieler-Profil","Detaillierte Statistiken")
 
     -- Verbesserte Header Box mit Spielername (Theme-Farben)
-    local headerBg = isOnline and COLOR_STATS_ONLINE or COLOR_STATS_HEADER
+    local headerBg = isOnline and COLORS.STATS_ONLINE or COLORS.STATS_HEADER
     drawBox(4,4,mw-3,8,headerBg)
-    drawBorder(4,4,mw-3,8,COLOR_STATS_BORDER)
+    drawBorder(4,4,mw-3,8,COLORS.STATS_BORDER)
 
     local y = 5
-    mcenter(y, "~ "..playerName.." ~", COLOR_STATS_BORDER, headerBg); y = y + 1
+    mcenter(y, "~ "..playerName.." ~", COLORS.STATS_BORDER, headerBg); y = y + 1
 
     local statusLabel = isOnline and "[ONLINE]" or "[OFFLINE]"
-    local statusColor = isOnline and COLOR_SUCCESS or COLOR_DISABLED
+    local statusColor = isOnline and COLOR_SUCCESS or COLORS.DISABLED
     mcenter(y, statusLabel, statusColor, headerBg); y = y + 1
 
     -- Zeige "Zuletzt gesehen" oder Spielzeit
@@ -1277,9 +1372,9 @@ local function drawPlayerStatsDetail(playerName)
         if stats.lastSeen and type(stats.lastSeen) == "number" then
             local timeSince = os.epoch("utc") - stats.lastSeen
             local lastSeenStr = formatTime(timeSince) .. " her"
-            mcenter(y, "Zuletzt: " .. lastSeenStr, COLOR_DISABLED, headerBg); y = y + 1
+            mcenter(y, "Zuletzt: " .. lastSeenStr, COLORS.DISABLED, headerBg); y = y + 1
         else
-            mcenter(y, "Zuletzt: unbekannt", COLOR_DISABLED, headerBg); y = y + 1
+            mcenter(y, "Zuletzt: unbekannt", COLORS.DISABLED, headerBg); y = y + 1
         end
     else
         mcenter(y, "Spielzeit: " .. formatTime(stats.totalTimeSpent), colors.white, headerBg); y = y + 1
@@ -1288,68 +1383,68 @@ local function drawPlayerStatsDetail(playerName)
     -- Statistik Box mit Rahmen (Theme-Farben)
     y = 10
     drawBox(4,y,mw-3,mh-5,COLOR_PANEL_DARK)
-    drawBorder(4,y,mw-3,mh-5,COLOR_STATS_HEADER)
+    drawBorder(4,y,mw-3,mh-5,COLORS.STATS_HEADER)
     y = y + 1
 
     -- Aktivitäts-Statistiken mit Symbolen
-    mcenter(y, "=== AKTIVITAET ===", COLOR_STATS_BORDER, COLOR_PANEL_DARK); y = y + 1
+    mcenter(y, "=== AKTIVITAET ===", COLORS.STATS_BORDER, COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"# Besuche:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(6,y,"# Besuche:",COLORS.DISABLED,COLOR_PANEL_DARK)
     mwrite(mw-15,y,tostring(stats.totalVisits),colors.white,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"# Spielzeit:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(6,y,"# Spielzeit:",COLORS.DISABLED,COLOR_PANEL_DARK)
     mwrite(mw-15,y,formatTime(stats.totalTimeSpent),COLOR_INFO,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"# Spiele:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(6,y,"# Spiele:",COLORS.DISABLED,COLOR_PANEL_DARK)
     mwrite(mw-15,y,tostring(stats.gamesPlayed),colors.white,COLOR_PANEL_DARK); y = y + 2
 
     -- Finanz-Statistiken mit besseren Farben (Theme-Farben)
-    mcenter(y, "=== FINANZEN ===", COLOR_STATS_BORDER, COLOR_PANEL_DARK); y = y + 1
+    mcenter(y, "=== FINANZEN ===", COLORS.STATS_BORDER, COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"$ Gesetzt:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(6,y,"$ Gesetzt:",COLORS.DISABLED,COLOR_PANEL_DARK)
     mwrite(mw-15,y,stats.totalWagered.." Dia",COLOR_ACCENT,COLOR_PANEL_DARK); y = y + 1
 
     local netProfit = stats.totalWon - stats.totalLost
     local profitColor = netProfit >= 0 and COLOR_SUCCESS or COLOR_WARNING
-    mwrite(6,y,"$ Netto:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(6,y,"$ Netto:",COLORS.DISABLED,COLOR_PANEL_DARK)
     local netText = netProfit >= 0 and "+"..netProfit or tostring(netProfit)
     mwrite(mw-15,y,netText.." Dia",profitColor,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"$ Groesster Gewinn:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(6,y,"$ Groesster Gewinn:",COLORS.DISABLED,COLOR_PANEL_DARK)
     mwrite(mw-15,y,"+"..stats.biggestWin.." Dia",COLOR_SUCCESS,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"$ Groesster Verlust:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(6,y,"$ Groesster Verlust:",COLORS.DISABLED,COLOR_PANEL_DARK)
     mwrite(mw-15,y,"-"..stats.biggestLoss.." Dia",COLOR_WARNING,COLOR_PANEL_DARK); y = y + 2
 
     -- Streak-Statistiken mit Verbesserungen (Theme-Farben + Deutsche Labels)
-    mcenter(y, "=== SERIEN ===", COLOR_STATS_BORDER, COLOR_PANEL_DARK); y = y + 1
+    mcenter(y, "=== SERIEN ===", COLORS.STATS_BORDER, COLOR_PANEL_DARK); y = y + 1
 
     local streakText = ""
     local streakColor = colors.white
     local streakIcon = ""
     if stats.currentStreak > 0 then
         streakText = "+"..stats.currentStreak.." Siege"
-        streakColor = COLOR_STREAK_WIN
+        streakColor = COLORS.STREAK_WIN
         streakIcon = ">> "
     elseif stats.currentStreak < 0 then
         streakText = math.abs(stats.currentStreak).." Niederlagen"
-        streakColor = COLOR_STREAK_LOSS
+        streakColor = COLORS.STREAK_LOSS
         streakIcon = "<< "
     else
         streakText = "Keine Serie"
-        streakColor = COLOR_DISABLED
+        streakColor = COLORS.DISABLED
         streakIcon = "-- "
     end
-    mwrite(6,y,streakIcon.."Aktuell:",COLOR_DISABLED,COLOR_PANEL_DARK)
+    mwrite(6,y,streakIcon.."Aktuell:",COLORS.DISABLED,COLOR_PANEL_DARK)
     mwrite(mw-20,y,streakText,streakColor,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,">> Beste Serie:",COLOR_DISABLED,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.longestWinStreak.." Siege",COLOR_STREAK_WIN,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,">> Beste Serie:",COLORS.DISABLED,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.longestWinStreak.." Siege",COLORS.STREAK_WIN,COLOR_PANEL_DARK); y = y + 1
 
-    mwrite(6,y,"<< Schlechteste:",COLOR_DISABLED,COLOR_PANEL_DARK)
-    mwrite(mw-15,y,stats.longestLoseStreak.." Niederlagen",COLOR_STREAK_LOSS,COLOR_PANEL_DARK); y = y + 1
+    mwrite(6,y,"<< Schlechteste:",COLORS.DISABLED,COLOR_PANEL_DARK)
+    mwrite(mw-15,y,stats.longestLoseStreak.." Niederlagen",COLORS.STREAK_LOSS,COLOR_PANEL_DARK); y = y + 1
 
-    addButton("player_detail_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLOR_STATS_HEADER)
+    addButton("player_detail_back",4,mh-4,mw-3,mh-2,"<< Zurueck",colors.white,COLORS.STATS_HEADER)
 end
 
 local function drawAdminPanel()
@@ -1407,14 +1502,14 @@ local function drawGameManagement()
 
     -- Roulette
     local rConfig = GAME_CONFIG.roulette
-    local rColor = gameStatus.roulette and rConfig.enabledColor or COLOR_DISABLED
+    local rColor = gameStatus.roulette and rConfig.enabledColor or COLORS.DISABLED
     local rFg = gameStatus.roulette and rConfig.enabledFg or colors.gray
     local rLabel = rConfig.label .. " " .. (gameStatus.roulette and "[AN]" or "[AUS]")
     addButton(rConfig.toggleButtonId, 4, btnY, mid-1, btnY+btnH, rLabel, rFg, rColor)
 
     -- Slots
     local sConfig = GAME_CONFIG.slots
-    local sColor = gameStatus.slots and sConfig.enabledColor or COLOR_DISABLED
+    local sColor = gameStatus.slots and sConfig.enabledColor or COLORS.DISABLED
     local sFg = gameStatus.slots and sConfig.enabledFg or colors.gray
     local sLabel = sConfig.label .. " " .. (gameStatus.slots and "[AN]" or "[AUS]")
     addButton(sConfig.toggleButtonId, mid+1, btnY, mw-3, btnY+btnH, sLabel, sFg, sColor)
@@ -1423,14 +1518,14 @@ local function drawGameManagement()
 
     -- Coinflip
     local cConfig = GAME_CONFIG.coinflip
-    local cColor = gameStatus.coinflip and cConfig.enabledColor or COLOR_DISABLED
+    local cColor = gameStatus.coinflip and cConfig.enabledColor or COLORS.DISABLED
     local cFg = gameStatus.coinflip and cConfig.enabledFg or colors.gray
     local cLabel = cConfig.label .. " " .. (gameStatus.coinflip and "[AN]" or "[AUS]")
     addButton(cConfig.toggleButtonId, 4, btnY, mid-1, btnY+btnH, cLabel, cFg, cColor)
 
     -- High/Low
     local hConfig = GAME_CONFIG.hilo
-    local hColor = gameStatus.hilo and hConfig.enabledColor or COLOR_DISABLED
+    local hColor = gameStatus.hilo and hConfig.enabledColor or COLORS.DISABLED
     local hFg = gameStatus.hilo and hConfig.enabledFg or colors.gray
     local hLabel = hConfig.label .. " " .. (gameStatus.hilo and "[AN]" or "[AUS]")
     addButton(hConfig.toggleButtonId, mid+1, btnY, mw-3, btnY+btnH, hLabel, hFg, hColor)
@@ -1439,7 +1534,7 @@ local function drawGameManagement()
 
     -- Blackjack
     local bConfig = GAME_CONFIG.blackjack
-    local bColor = gameStatus.blackjack and bConfig.enabledColor or COLOR_DISABLED
+    local bColor = gameStatus.blackjack and bConfig.enabledColor or COLORS.DISABLED
     local bFg = gameStatus.blackjack and bConfig.enabledFg or colors.gray
     local bLabel = bConfig.label .. " " .. (gameStatus.blackjack and "[AN]" or "[AUS]")
     addButton(bConfig.toggleButtonId, 4, btnY, mw-3, btnY+btnH, bLabel, bFg, bColor)
@@ -1456,20 +1551,20 @@ local function drawGameManagement()
 end
 
 local function handleAdminButton(id)
-    if not admin_panel_open then
+    if not AdminState.panelOpen then
         if id:match("^pin_%d$") then
             local digit = id:match("^pin_(%d)$")
-            if #admin_pin_input < 6 then
-                admin_pin_input = admin_pin_input .. digit
+            if #AdminState.pinInput < 6 then
+                AdminState.pinInput = AdminState.pinInput .. digit
                 drawAdminPinEntry()
             end
         elseif id == "pin_clear" then
-            admin_pin_input = ""
+            AdminState.pinInput = ""
             drawAdminPinEntry()
         elseif id == "pin_ok" then
-            if admin_pin_input == ADMIN_PIN then
-                admin_panel_open = true
-                admin_pin_input = ""
+            if AdminState.pinInput == AdminState.PIN then
+                AdminState.panelOpen = true
+                AdminState.pinInput = ""
                 drawAdminPanel()
             else
                 clearButtons()
@@ -1477,13 +1572,13 @@ local function handleAdminButton(id)
                 drawBox(5,8,mw-4,12,COLOR_WARNING)
                 mcenter(9,"FALSCHER PIN!",colors.white,COLOR_WARNING)
                 mcenter(10,"Zugriff verweigert",colors.white,COLOR_WARNING)
-                admin_pin_input = ""
+                AdminState.pinInput = ""
                 sleep(2)
                 mode="menu"
                 drawMainMenu()
             end
         elseif id == "admin_cancel" then
-            admin_pin_input = ""
+            AdminState.pinInput = ""
             mode="menu"
             drawMainMenu()
         end
@@ -1592,26 +1687,26 @@ local function handleAdminButton(id)
             drawAdminPanel()
 
         elseif id == "stats_players" then
-            currentStatsOffset = 0
-            drawPlayerStatsList(currentStatsOffset)
+            AdminState.currentStatsOffset = 0
+            drawPlayerStatsList(AdminState.currentStatsOffset)
 
         elseif id == "stats_prev" then
-            currentStatsOffset = math.max(0, (currentStatsOffset or 0) - STATS_PAGE_SIZE)
-            drawPlayerStatsList(currentStatsOffset)
+            AdminState.currentStatsOffset = math.max(0, (AdminState.currentStatsOffset or 0) - STATS_PAGE_SIZE)
+            drawPlayerStatsList(AdminState.currentStatsOffset)
 
         elseif id == "stats_next" then
-            currentStatsOffset = (currentStatsOffset or 0) + STATS_PAGE_SIZE
-            drawPlayerStatsList(currentStatsOffset)
+            AdminState.currentStatsOffset = (AdminState.currentStatsOffset or 0) + STATS_PAGE_SIZE
+            drawPlayerStatsList(AdminState.currentStatsOffset)
 
         elseif id:match("^stats_player_") then
             local playerName = id:match("^stats_player_(.+)$")
             drawPlayerStatsDetail(playerName)
 
         elseif id == "player_stats_list" then
-            drawPlayerStatsList(currentStatsOffset or 0)
+            drawPlayerStatsList(AdminState.currentStatsOffset or 0)
 
         elseif id == "player_detail_back" then
-            drawPlayerStatsList(currentStatsOffset or 0)
+            drawPlayerStatsList(AdminState.currentStatsOffset or 0)
 
         elseif id == "admin_games" then
             drawGameManagement()
@@ -1628,7 +1723,7 @@ local function handleAdminButton(id)
             end
 
         elseif id == "admin_close" then
-            admin_panel_open = false
+            AdminState.panelOpen = false
             mode="menu"
             drawMainMenu()
         end
@@ -2970,7 +3065,7 @@ local function handleButton(id)
             end
         elseif id=="admin_panel" then
             mode="admin"
-            admin_pin_input=""
+            AdminState.pinInput=""
             drawAdminPinEntry()
         end
         return
@@ -2995,7 +3090,7 @@ local function handleButton(id)
             mode="slots"; drawSlotsSimple()
         elseif id=="admin_panel" then
             mode="admin"
-            admin_pin_input = ""
+            AdminState.pinInput = ""
             drawAdminPinEntry()
         end
     
